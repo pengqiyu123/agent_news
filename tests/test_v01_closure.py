@@ -140,3 +140,61 @@ def test_radar_op_still_local_fallbacks():
     # radar.seed_defaults is idempotent — returns ok or skipped, not the
     # "服务未运行" failure message.
     assert result.get("status") in ("ok", "skipped"), result
+
+
+def test_cli_start_lock_uses_runtime_logs():
+    """CLI auto-start lock must match scripts/start_backend.ps1."""
+    from agent_news import cli
+    from agent_news.config import get_settings
+
+    settings = get_settings()
+    assert cli._start_lock_path() == settings.runtime_dir / "logs" / "backend.start.lock"
+    assert cli._backend_pid_path() == settings.runtime_dir / "logs" / "backend.pid"
+
+
+def test_cli_auto_start_writes_shared_pid(monkeypatch):
+    """CLI auto-start writes the same PID file used by start/stop scripts."""
+    from agent_news import cli
+
+    class FakeProc:
+        pid = 12345
+
+    calls = {"health": 0}
+
+    def fake_server_is_up():
+        calls["health"] += 1
+        return calls["health"] >= 2
+
+    monkeypatch.setattr(cli, "_server_is_up", fake_server_is_up)
+    monkeypatch.setattr(cli, "_test_start_lock_alive", lambda: False)
+
+    with patch("subprocess.Popen", return_value=FakeProc()):
+        assert cli._auto_start_server(timeout=1.0) is True
+
+    assert cli._backend_pid_path().read_text(encoding="utf-8") == "12345"
+
+
+def test_cli_http_calls_ignore_environment_proxy(monkeypatch):
+    """Local tool-server calls must bypass machine proxy settings."""
+    from agent_news import cli
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"item": {"status": "ok", "ok": True}}
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr(cli, "_server_is_up", lambda: True)
+
+    with patch("httpx.post", side_effect=fake_post):
+        result = cli._exec("radar.status", {})
+
+    assert result["ok"] is True
+    assert calls
+    assert calls[0]["trust_env"] is False

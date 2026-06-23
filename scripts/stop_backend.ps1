@@ -2,7 +2,10 @@ $ErrorActionPreference = "Stop"
 
 function Get-ProjectBackendProcesses {
     @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -eq "python.exe" -and ([string]$_.CommandLine) -like "*agent_news.main:app*"
+        $_.Name -eq "python.exe" -and (
+            ([string]$_.CommandLine) -like "*agent_news.main:app*" -or
+            ([string]$_.CommandLine) -like "*agent_news daemon start*"
+        )
     })
 }
 

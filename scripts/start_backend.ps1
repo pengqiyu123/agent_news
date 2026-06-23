@@ -26,12 +26,27 @@ function Is-BackedByVenv($ProcessInfo, [string]$VenvPythonPath) {
     if (-not $ProcessInfo) { return $false }
     $exePath = [string]$ProcessInfo.ExecutablePath
     if ($exePath -and $exePath -ieq $VenvPythonPath) { return $true }
+    $cmd = [string]$ProcessInfo.CommandLine
+    if ($cmd -and $cmd -like "*$VenvPythonPath*") { return $true }
+    $parentPid = [int]$ProcessInfo.ParentProcessId
+    if ($parentPid) {
+        $parent = Get-ProcessInfo -ProcessId $parentPid
+        if ($parent) {
+            $parentExePath = [string]$parent.ExecutablePath
+            if ($parentExePath -and $parentExePath -ieq $VenvPythonPath) { return $true }
+            $parentCmd = [string]$parent.CommandLine
+            if ($parentCmd -and $parentCmd -like "*$VenvPythonPath*") { return $true }
+        }
+    }
     return $false
 }
 
 function Get-ProjectBackendProcesses {
     @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -eq "python.exe" -and ([string]$_.CommandLine) -like "*agent_news.main:app*"
+        $_.Name -eq "python.exe" -and (
+            ([string]$_.CommandLine) -like "*agent_news.main:app*" -or
+            ([string]$_.CommandLine) -like "*agent_news daemon start*"
+        )
     })
 }
 
@@ -108,11 +123,11 @@ Write-StartLock
 
 # ── Already-running check ───────────────────────────────────────────────────
 $projectBackends = @(Get-ProjectBackendProcesses)
-$healthyVenvBackend = $null
+$healthyVenvBackends = @()
 $staleBackends = @()
 foreach ($proc in $projectBackends) {
     if (Is-BackedByVenv $proc $venvPython) {
-        if (-not $healthyVenvBackend) { $healthyVenvBackend = $proc } else { $staleBackends += $proc }
+        $healthyVenvBackends += $proc
     } else {
         $staleBackends += $proc
     }
@@ -123,9 +138,14 @@ foreach ($proc in $staleBackends) {
 }
 if ($staleBackends.Count -gt 0) { Start-Sleep -Seconds 2 }
 
-if ($healthyVenvBackend) {
+if ($healthyVenvBackends.Count -gt 0) {
     $listenerPid = Get-ListenerPid
-    if ($listenerPid -and $listenerPid -eq [int]$healthyVenvBackend.ProcessId) {
+    $listenerProc = if ($listenerPid) { Get-ProcessInfo -ProcessId $listenerPid } else { $null }
+    if (
+        $listenerPid -and
+        (Is-ProjectBackend $listenerProc) -and
+        (Is-BackedByVenv $listenerProc $venvPython)
+    ) {
         Set-Content -Path $pidFile -Value $listenerPid
         Write-Host "[INFO] agent-news is already running. PID=$listenerPid"
         Write-Host "URL: $appUrl"

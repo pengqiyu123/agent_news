@@ -39,7 +39,7 @@ def _server_is_up() -> bool:
     """Probe the FastAPI server's /api/health. True if reachable."""
     try:
         import httpx
-        r = httpx.get(f"{SERVER_URL}/api/health", timeout=HEALTH_TIMEOUT)
+        r = httpx.get(f"{SERVER_URL}/api/health", timeout=HEALTH_TIMEOUT, trust_env=False)
         return r.status_code == 200
     except Exception:
         return False
@@ -47,8 +47,18 @@ def _server_is_up() -> bool:
 
 def _start_lock_path():
     """Path to the start-lock file (shared with start_backend.ps1)."""
+    return _backend_log_dir() / "backend.start.lock"
+
+
+def _backend_log_dir():
+    """Runtime backend log dir shared by CLI auto-start and start_backend.ps1."""
     from .config import get_settings
-    return get_settings().logs_dir / "backend.start.lock"
+    return get_settings().runtime_dir / "logs"
+
+
+def _backend_pid_path():
+    """PID file path shared by CLI auto-start and start_backend.ps1."""
+    return _backend_log_dir() / "backend.pid"
 
 
 def _test_start_lock_alive() -> bool:
@@ -144,12 +154,12 @@ def _auto_start_server(timeout: float = 30.0) -> bool:
     if os.name == "nt":
         creationflags = 0x00000008 | 0x00000200
 
-    log_dir = settings.logs_dir
+    log_dir = _backend_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "auto_start.log", "a", encoding="utf-8")
 
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [python_exe, "-m", "uvicorn", "agent_news.main:app",
              "--host", "127.0.0.1", "--port", "8000"],
             cwd=str(settings.project_root),
@@ -158,6 +168,8 @@ def _auto_start_server(timeout: float = 30.0) -> bool:
             stdin=subprocess.DEVNULL,
             creationflags=creationflags,
         )
+        if proc and proc.pid:
+            _backend_pid_path().write_text(str(proc.pid), encoding="utf-8")
     except Exception as e:
         print(f"[warn] auto-start failed: {e}", file=sys.stderr)
         _remove_start_lock()
@@ -201,6 +213,7 @@ def _exec(op_name: str, params: dict) -> dict:
                 f"{SERVER_URL}/api/operations/{op_name}/execute",
                 json={"params": params},
                 timeout=300,
+                trust_env=False,
             )
             if r.status_code == 200:
                 return r.json().get("item", r.json())
@@ -223,6 +236,7 @@ def _exec(op_name: str, params: dict) -> dict:
                 f"{SERVER_URL}/api/operations/{op_name}/execute",
                 json={"params": params},
                 timeout=300,
+                trust_env=False,
             )
             if r.status_code == 200:
                 return r.json().get("item", r.json())
@@ -242,7 +256,7 @@ def _exec(op_name: str, params: dict) -> dict:
             "status": "failed",
             "message": (
                 "服务未运行且自动启动失败。浏览器操作必须在服务进程中执行，"
-                "请手动运行 start.bat 或检查 logs/auto_start.log。"
+                "请手动运行 start.bat 或检查 runtime/logs/auto_start.log。"
             ),
             "ok": False,
         }
@@ -272,7 +286,7 @@ def cmd_status() -> int:
     if up:
         try:
             import httpx
-            r = httpx.get(f"{SERVER_URL}/api/health", timeout=HEALTH_TIMEOUT)
+            r = httpx.get(f"{SERVER_URL}/api/health", timeout=HEALTH_TIMEOUT, trust_env=False)
             out["health"] = r.json()
         except Exception:
             pass

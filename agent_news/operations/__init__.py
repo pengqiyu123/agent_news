@@ -11,6 +11,9 @@ from .registry import OPERATION_REGISTRY, OperationRegistry
 # Import operation modules so their @operation decorators run on package import.
 # Each module registers itself into OPERATION_REGISTRY as a side effect.
 from . import radar  # noqa: F401  — radar operations (sync/cluster/score/deepdive)
+from . import articles  # noqa: F401  — article CRUD/payload operations
+from . import audit  # noqa: F401  — audit review operations
+from . import workflow  # noqa: F401  — workflow observation operations
 from . import wechat  # noqa: F401  — wechat operations (nav/fill/save/publish)
 
 __all__ = [

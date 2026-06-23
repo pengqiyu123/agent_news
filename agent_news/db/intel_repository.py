@@ -86,6 +86,35 @@ class IntelRepository(Repository):
             session.delete(row)
         return True
 
+    def update_source_fields(self, key: str, **fields: Any) -> Source | None:
+        with self.transaction() as session:
+            row = session.get(SourceRow, key)
+            if row is None:
+                return None
+            allowed = {
+                "name",
+                "kind",
+                "url",
+                "enabled",
+                "priority",
+                "weight",
+                "tags",
+                "schedule",
+                "capabilities",
+                "config",
+            }
+            for field, value in fields.items():
+                if field not in allowed:
+                    continue
+                if field == "enabled":
+                    row.enabled = _bool_text(value)
+                elif field in ("priority", "weight"):
+                    setattr(row, field, str(value))
+                else:
+                    setattr(row, field, value)
+            session.flush()
+            return self._row_to_source(row)
+
     def _apply_source(self, row: SourceRow, source: Source) -> None:
         row.name = source.name
         row.kind = source.kind
@@ -171,6 +200,31 @@ class IntelRepository(Repository):
                 row = IntelEventRow(id=event.id)
                 session.add(row)
             self._apply_event(row, event)
+            session.flush()
+            return self._row_to_event(row)
+
+    def update_event_fields(self, event_id: str, **fields: Any) -> IntelEvent | None:
+        with self.transaction() as session:
+            row = session.get(IntelEventRow, event_id)
+            if row is None:
+                return None
+            allowed = {
+                "ignored",
+                "watchlisted",
+                "worth_to_brief",
+                "worth_reason",
+                "deep_dive_id",
+                "deep_dive_status",
+                "deep_dive_summary",
+                "article_id",
+            }
+            for field, value in fields.items():
+                if field not in allowed:
+                    continue
+                if field in ("ignored", "watchlisted", "worth_to_brief"):
+                    setattr(row, field, _bool_text(value))
+                else:
+                    setattr(row, field, value)
             session.flush()
             return self._row_to_event(row)
 

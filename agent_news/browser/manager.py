@@ -261,6 +261,79 @@ class BrowserManager:
         except Exception:
             return {"current_url": "", "is_editor_page": False, "page_count": 0, "page_urls": []}
 
+    def observe_tabs(self) -> dict:
+        """Return live tab metadata on the worker thread."""
+        def _do():
+            pages = _list_live_context_pages(self._context) if self._context is not None else []
+            tabs = []
+            focused_index = None
+            for index, page in enumerate(pages):
+                url = _page_url_or_empty(page)
+                try:
+                    title = str(page.title() or "")
+                except Exception:
+                    title = ""
+                if page is self._page:
+                    focused_index = index
+                tabs.append(
+                    {
+                        "index": index,
+                        "url": url,
+                        "title": title,
+                        "is_blank": _is_blank_page(page),
+                        "is_editor": _is_editor_like_page(page),
+                    }
+                )
+            return {"page_count": len(tabs), "tabs": tabs, "focused_index": focused_index}
+
+        try:
+            return self._run_in_worker(_do)
+        except Exception as exc:
+            return {"page_count": 0, "tabs": [], "focused_index": None, "error": f"{type(exc).__name__}: {exc}"}
+
+    def focus_editor_tab(self) -> dict:
+        """Focus an existing editor tab without creating a new page."""
+        def _do():
+            pages = _list_live_context_pages(self._context) if self._context is not None else []
+            for index, page in enumerate(pages):
+                if not _is_editor_like_page(page):
+                    continue
+                self._page = page
+                try:
+                    page.bring_to_front()
+                except Exception:
+                    pass
+                self._resident_page = "editor|focused"
+                return {"focused": True, "focused_index": index, "url": _page_url_or_empty(page)}
+            return {"focused": False, "focused_index": None, "url": "", "error": "editor tab not found"}
+
+        return self._run_in_worker(_do)
+
+    def close_blank_tabs(self) -> dict:
+        """Close about:blank tabs while preserving editor/effective tabs."""
+        def _do():
+            pages = _list_live_context_pages(self._context) if self._context is not None else []
+            closed = []
+            kept = []
+            if len(pages) <= 1:
+                return {"closed_count": 0, "closed": [], "kept": [_page_url_or_empty(p) for p in pages]}
+            for index, page in enumerate(pages):
+                url = _page_url_or_empty(page)
+                if _is_blank_page(page) and page is not self._page:
+                    try:
+                        page.close()
+                        closed.append({"index": index, "url": url})
+                    except Exception:
+                        kept.append(url)
+                else:
+                    kept.append(url)
+            if not _can_interact_with_page(self._page):
+                live_pages = _list_live_context_pages(self._context) if self._context is not None else []
+                self._page = self._pick_reusable_page(live_pages)
+            return {"closed_count": len(closed), "closed": closed, "kept": kept}
+
+        return self._run_in_worker(_do)
+
     def signature_for(self, channel: dict) -> tuple:
         normalized = ensure_channel_defaults(channel)
         return (

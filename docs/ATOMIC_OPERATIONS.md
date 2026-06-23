@@ -33,15 +33,38 @@ POST /api/operations/batch
 
 ## 信息雷达（radar.*）
 
+设计背景见 `docs/RADAR_DESIGN.md`，实施架构见 `docs/TECHNICAL_ARCHITECTURE.md`。当前已补齐状态观测、源健康诊断、候选源治理、事件复核推荐、深挖复核等原子能力。
+
 | 操作 | 参数 | 说明 |
 |---|---|---|
+| `radar.status` | `include_recent?` | 只读：查看源、raw、events、alerts、deep dives 数量和建议下一步，不联网 |
+| `radar.review_sources` | `probe?`, `limit_per_source?`, `source_key?` | 只读/可探测：复核源配置和健康状态，`probe=false` 不联网 |
 | `radar.seed_defaults` | — | 初始化默认源（仅当无源时生效，幂等） |
-| `radar.add_source` | `key`, `source_name`, `url`, `kind?`, `tags?`, `priority?` | 添加信息源 |
-| `radar.remove_source` | `source_key` | 删除信息源 |
-| `radar.sync_sources` | `source_key?` | 采集所有/单个源 → raw_items |
+| `radar.discover_sources` | `candidates?`, `query?`, `topic?`, `kind?`, `language?`, `limit?` | 候选源发现/规范化。本轮外部 Agent 传 candidates，不绑定搜索供应商 |
+| `radar.validate_source` | `url`, `kind?`, `topic?`, `limit_per_source?` | 验证候选源可访问、可解析、近期有内容、未重复，并给出评分 |
+| `radar.propose_source` | `validated_source` | 把验证结果整理成添加建议，不写库 |
+| `radar.add_validated_source` | `validated_source`, `confirmed?` | 只添加通过验证的候选源；`needs_confirmation` 需 `confirmed=true` |
+| `radar.add_source` | `key`, `source_name`, `url`, `kind?`, `tags?`, `priority?` | 底层添加信息源。Agent 自动发现新源时不要直接调用，先走验证链路 |
+| `radar.sync_sources` | `source_key?` | 逐源采集所有/单个源 → raw_items，返回 `source_results` 和 partial 信息 |
 | `radar.sync_one_source` | `source_key` | 采集单个源 |
-| `radar.build_events` | `merge_threshold?`, `alert_threshold?`, `watchlist?`, `clear_raw?` | 聚类+打分+物化 alerts |
-| `radar.deep_dive_event` | `event_id`, `max_sources?`, `force?` | 抓全文、提取素材、附写作指南 |
+| `radar.build_events` | `merge_threshold?`, `alert_threshold?`, `watchlist?`, `clear_raw?` | 聚类+打分+物化 alerts，返回 `top_events` 和下一步建议 |
+| `radar.review_events` | `limit?`, `min_score?`, `include_ignored?`, `watchlist?` | 只读：返回 Top events、推荐理由、风险和下一步建议 |
+| `radar.deep_dive_event` | `event_id`, `max_sources?`, `force?` | 抓全文、提取素材、附写作指南；返回 `source_results` 和 `writing_readiness` |
+| `radar.review_deep_dive` | `event_id?`, `deep_dive_id?` | 只读：复核深挖素材、来源成功/失败和写作准备度 |
+| `radar.source_health_report` | — | 只读：汇总源池健康度、低贡献源、疑似重复源 |
+| `radar.disable_stale_sources` | `dry_run?`, `min_raw_items?` | 停用长期无贡献源；默认 dry-run，只返回将要停用的源 |
+| `radar.remove_source` | `source_key` | 删除信息源 |
+
+### 后续雷达原子
+
+这些尚未进入注册表，只作为后续增强项，不要在当前任务里调用。
+
+| 操作 | 参数 | 说明 |
+|---|---|---|
+| `radar.review_raw_items` | `limit?`, `source_key?` | 只读：查看最近 raw items，排查采集与聚类之间的问题 |
+| `radar.update_source` | `source_key`, fields | 更新源名称、URL、标签、优先级、权重、配置 |
+| `radar.enable_source` / `radar.disable_source` | `source_key` | 启用/停用信息源，不删除历史数据 |
+| `radar.ignore_event` / `radar.unignore_event` | `event_id` | 标记噪声事件或恢复事件 |
 
 读取端点（非操作）：
 - `GET /api/intel/sources` / `GET /api/intel/sources/{key}`
@@ -67,6 +90,9 @@ POST /api/operations/batch
 | `wechat.open_existing_draft` | `title` | 按标题打开已有草稿编辑页 |
 | `wechat.list_drafts` | `limit?` | 列出草稿箱标题（只读） |
 | `wechat.review_draft_box` | `title?`, `limit?` | 只读：草稿箱复核。传标题时校验目标草稿是否已保存到远端草稿箱 |
+| `wechat.inspect_tabs` | — | 只读：返回当前浏览器标签页 URL、标题、是否 blank、是否编辑页 |
+| `wechat.focus_editor_tab` | — | 聚焦已有 `action=edit` 编辑页，不新开页面 |
+| `wechat.close_blank_tabs` | — | 关闭重复 `about:blank` 标签，不关闭编辑页 |
 
 ### 登录流程（AI 调用顺序）
 
@@ -113,6 +139,7 @@ POST /api/operations/batch
 | `wechat.set_collection` | `name` | `name=""` | 合集（**任意名称**，不写死） |
 | `wechat.set_claim_source` | `name` | `name=""` | 创作来源（**任意名称**） |
 | `wechat.generate_ai_cover` | `prompt`, `wait_seconds?` | `prompt=""` | AI 封面 |
+| `wechat.upload_cover_file` | `file_path` | 文件不存在/格式不支持 | 上传本地封面图片；找不到上传 input 或回读无封面时失败 |
 | `wechat.list_collections` | — | — | 只读：列出可选合集 |
 | `wechat.list_claim_sources` | — | — | 只读：列出可选创作来源 |
 
@@ -175,7 +202,23 @@ POST /api/operations/batch
 
 ---
 
-## 文章管理（REST，非操作）
+## 文章管理（article.*）
+
+Agent 优先用 `article.*` 原子桥接雷达和微信，不需要混用临时参数。REST CRUD 仍保留给普通 API 调用。
+
+| 操作 | 参数 | 说明 |
+|---|---|---|
+| `article.create` | `title`, `digest?`, `body_markdown`, `author?`, `material_id?` | 保存 Agent 已写好的文章，不自动发布、不创建 workflow |
+| `article.get` | `article_id` | 读取文章详情 |
+| `article.list` | `page?`, `page_size?` | 文章列表 |
+| `article.update` | `article_id`, `fields` 或字段 kwargs | 修改标题、摘要、作者、正文、素材关联 |
+| `article.prepare_wechat_payload` | `article_id`, `cover_prompt?` | 只读：转成微信填写参数，不打开浏览器 |
+
+`article.prepare_wechat_payload` 的默认封面提示词是物品/场景类描述，例如“一个与标题主题相关的物品或办公场景写实图片，不包含文字”。不要让封面提示词生成文字海报。
+
+`article.prepare_wechat_payload` 会校验微信编辑必填项：标题、作者、正文。缺字段时返回 `failed`，state 中包含 `missing_required`、`ready_for_wechat_fill=false`、`suggested_next_operation="article.update"`。不要把缺作者的 payload 继续传给 `wechat.fill_editor_required`。
+
+### 文章 REST 端点
 
 | 端点 | 说明 |
 |---|---|
@@ -185,7 +228,20 @@ POST /api/operations/batch
 | `PUT /api/articles/{id}` | 更新 |
 | `DELETE /api/articles/{id}` | 删除 |
 
-## 工作流（REST，非操作）
+### 后续文章原子
+
+| 操作 | 参数 | 说明 |
+|---|---|---|
+| `article.create_from_deep_dive` | `event_id?`, `deep_dive_id?` | 可选：从 deep dive 创建文章草稿壳或素材关联；默认不自动生成正文 |
+
+## 审计与工作流观测
+
+| 操作 | 参数 | 说明 |
+|---|---|---|
+| `audit.review_tasks` | `limit?`, `status?`, `operation_prefix?` | 只读：查看最近操作审计、失败步骤和错误信息 |
+| `workflow.status` | `workflow_session_id` | 只读：查看工作流当前状态、文章 ID、合法下一步、last_error、settings_applied |
+
+## 工作流 REST
 
 集中式状态机，非法转换返回 422。
 
