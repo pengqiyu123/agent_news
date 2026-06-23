@@ -1,0 +1,31 @@
+# Runtime data
+data/
+logs/
+runtime/
+tests/_test_data/
+tests/**/browser_profile/
+**/Local State
+**/Preferences
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Env / secrets
+.env
+.env.local
