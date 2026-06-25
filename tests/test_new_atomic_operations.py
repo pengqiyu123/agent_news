@@ -30,6 +30,7 @@ def test_new_operations_registered():
         "article.get",
         "article.list",
         "article.update",
+        "article.review_quality",
         "article.prepare_wechat_payload",
         "audit.review_tasks",
         "workflow.status",
@@ -159,7 +160,7 @@ def test_article_operations_and_wechat_payload():
     article_id = resp.json()["item"]["state"]["article_id"]
 
     resp = client.post("/api/operations/article.prepare_wechat_payload/execute", json={
-        "params": {"article_id": article_id}
+        "params": {"article_id": article_id, "override_quality_gate": True}
     })
     assert resp.status_code == 200
     state = resp.json()["item"]["state"]
@@ -167,7 +168,8 @@ def test_article_operations_and_wechat_payload():
     assert state["ready_for_wechat_fill"] is True
     assert state["missing_required"] == []
     assert state["suggested_steps"][0]["op"] == "wechat.fill_editor_required"
-    assert "不包含文字" in state["cover_prompt"]
+    assert "文字" in state["cover_prompt"]
+    assert "海报" in state["cover_prompt"]
 
 
 def test_prepare_wechat_payload_requires_author():

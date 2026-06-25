@@ -1,9 +1,8 @@
 """WeChat operations tests — registration + parameter validation.
 
-Modeled on old project's test pattern: test pure logic (registration, param
-validation, skip behavior) without mocking the browser. The old project
-(test_browser_mixin.py, test_wechat_selector_visibility.py) tests store method
-binding and selector config — not "graceful failure without browser".
+These tests cover pure logic (registration, param validation, skip behavior)
+without mocking the browser. Real browser behavior belongs in explicit
+integration validation.
 
 A separate integration test (skipped by default) can exercise the real browser
 when WECHAT_INTEGRATION=1 is set.
@@ -51,6 +50,7 @@ def test_all_wechat_operations_registered(client):
         # save / publish
         "wechat.save_as_draft",
         "wechat.save_current_editor_as_draft",
+        "wechat.inspect_body_word_count",
         "wechat.publish_preflight",
         "wechat.click_publish",
         "wechat.confirm_publish_modal",
@@ -183,6 +183,135 @@ def test_publish_preflight_requires_author_even_when_title_and_body_exist(monkey
     assert result.state["checks"]["title"] is True
     assert result.state["checks"]["body"] is True
     assert result.state["checks"]["author"] is False
+
+
+def test_publish_preflight_blocks_when_wechat_body_word_count_is_zero(monkeypatch):
+    """WeChat's bottom-bar body counter is authoritative for publish readiness."""
+    from agent_news.operations.wechat import cover
+    from agent_news.operations.wechat import save_publish
+
+    class _EditorPage:
+        url = "https://mp.weixin.qq.com/cgi-bin/appmsg?action=edit"
+
+        def evaluate(self, script, arg=None):  # noqa: ARG002
+            return {
+                "original": {"ok": True, "checked": True},
+                "reward": {"checked": False},
+                "collection": {"ok": True},
+                "claim_source": {"ok": True},
+            }
+
+    def fake_pick_selector(page, selectors, timeout=0):  # noqa: ARG001
+        if any("js_word_count" in selector for selector in selectors):
+            return "word_count"
+        if any("js_author" in selector or "placeholder*='作者'" in selector for selector in selectors):
+            return "author"
+        if any(
+            selector.startswith("div.ProseMirror[data-placeholder")
+            or "js_article_title" in selector
+            or selector.startswith("input[placeholder*='标题']")
+            or selector.startswith("textarea[placeholder*='标题']")
+            for selector in selectors
+        ):
+            return "title"
+        return "body"
+
+    def fake_read(page, selector, rich_text=False):  # noqa: ARG001
+        values = {
+            "title": "完整标题",
+            "author": "作者",
+            "body": "这是一段看似存在的正文。",
+            "word_count": "0",
+        }
+        return values[selector]
+
+    monkeypatch.setattr(save_publish, "pick_selector", fake_pick_selector)
+    monkeypatch.setattr(save_publish, "read_locator_value", fake_read)
+    monkeypatch.setattr(cover, "_read_cover_preview_state", lambda page: {"hasCover": True})
+
+    result = save_publish._publish_preflight_result(_EditorPage())
+
+    assert result.status == "failed"
+    assert "body" in result.state["missing"]
+    assert result.state["checks"]["body"] is False
+    assert result.state["body_word_count"] == 0
+    assert result.state["body_word_count_source"] == "wechat_counter"
+
+
+def test_save_current_editor_as_draft_blocks_when_body_word_count_is_zero(monkeypatch):
+    """Saving a draft must not click when WeChat reports 正文字数 0."""
+    from agent_news.operations.wechat import save_publish
+
+    class _EditorPage:
+        url = "https://mp.weixin.qq.com/cgi-bin/appmsg?action=edit"
+
+    clicked = {"value": False}
+
+    def fake_pick_selector(page, selectors, timeout=0):  # noqa: ARG001
+        if any("js_word_count" in selector for selector in selectors):
+            return "word_count"
+        return "body"
+
+    def fake_read(page, selector, rich_text=False):  # noqa: ARG001
+        values = {
+            "body": "这是一段看似存在的正文。",
+            "word_count": "0",
+        }
+        return values[selector]
+
+    def fake_click(*args, **kwargs):  # noqa: ARG001
+        clicked["value"] = True
+        return "save_button"
+
+    monkeypatch.setattr(save_publish, "pick_selector", fake_pick_selector)
+    monkeypatch.setattr(save_publish, "read_locator_value", fake_read)
+    monkeypatch.setattr(save_publish, "click_required_selector_once", fake_click)
+
+    result = save_publish._save_current_editor_as_draft(_EditorPage())
+
+    assert result.status == "failed"
+    assert clicked["value"] is False
+    assert result.state["body_word_count"] == 0
+
+
+def test_click_publish_blocks_when_body_word_count_is_zero(monkeypatch):
+    """The atomic publish click must not touch the publish button when body count is 0."""
+    from agent_news.operations.wechat import save_publish
+
+    class _EditorPage:
+        url = "https://mp.weixin.qq.com/cgi-bin/appmsg?action=edit"
+
+    clicked = {"value": False}
+
+    def fake_pick_selector(page, selectors, timeout=0):  # noqa: ARG001
+        if any("js_word_count" in selector for selector in selectors):
+            return "word_count"
+        return "body"
+
+    def fake_read(page, selector, rich_text=False):  # noqa: ARG001
+        values = {
+            "body": "这是一段看似存在的正文。",
+            "word_count": "0",
+        }
+        return values[selector]
+
+    def fake_click(*args, **kwargs):  # noqa: ARG001
+        clicked["value"] = True
+        return "publish_button"
+
+    def fake_with_session(channel=None, *, action_fn, **kwargs):  # noqa: ARG001
+        return action_fn(None, _EditorPage())
+
+    monkeypatch.setattr(save_publish, "pick_selector", fake_pick_selector)
+    monkeypatch.setattr(save_publish, "read_locator_value", fake_read)
+    monkeypatch.setattr(save_publish, "click_required_selector_once", fake_click)
+    monkeypatch.setattr(save_publish.BROWSER_MANAGER, "with_session", fake_with_session)
+
+    result = save_publish.click_publish(None)
+
+    assert result.status == "failed"
+    assert clicked["value"] is False
+    assert result.state["body_word_count"] == 0
 
 
 def test_set_original_disabled_skips(client):

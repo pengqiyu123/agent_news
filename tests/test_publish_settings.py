@@ -1,6 +1,5 @@
 """Publish-precheck operations tests — registration + skip behavior.
 
-Modeled on old project pattern: test pure logic without mocking the browser.
 Skip behavior (enabled=False / name="" -> skip) is the core contract.
 """
 

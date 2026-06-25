@@ -1,8 +1,8 @@
 """Pytest configuration — isolate each test run under a temp data dir.
 
 We point AGENT_NEWS_DATA_DIR at a tmp_path before importing app code, so tests
-never touch the real on-disk database. This mirrors the old project's habit of
-keeping test state separate from runtime state.
+never touch the real on-disk database. This keeps test state separate from
+runtime state.
 """
 
 from __future__ import annotations

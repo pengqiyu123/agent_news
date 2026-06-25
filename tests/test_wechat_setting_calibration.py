@@ -74,6 +74,49 @@ def test_fill_author_allows_platform_default_when_explicit(monkeypatch):
     assert result.state["platform_default"] is True
 
 
+def test_editor_single_field_operations_accept_agent_friendly_aliases(monkeypatch):
+    """Single-field editor ops keep canonical text/markdown params but accept common aliases."""
+    from agent_news.operations.wechat import editor
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_with_session(channel, *, action_fn, **kwargs):  # noqa: ARG001
+        return action_fn(object(), _FakePage({}))
+
+    monkeypatch.setattr(editor.BROWSER_MANAGER, "with_session", fake_with_session)
+    monkeypatch.setattr(
+        editor,
+        "_fill_title_on_page",
+        lambda page, text: calls.append(("title", text)) or editor.OperationResult.success(value=text),
+    )
+    monkeypatch.setattr(
+        editor,
+        "_fill_author_on_page",
+        lambda page, text, allow_platform_default=False: calls.append(("author", text)) or editor.OperationResult.success(value=text),
+    )
+    monkeypatch.setattr(
+        editor,
+        "write_plain_field",
+        lambda page, selectors, value, field_label: calls.append(("digest", value)) or "textarea.js_desc",
+    )
+    monkeypatch.setattr(editor, "read_locator_value", lambda page, selector: "摘要别名")
+    monkeypatch.setattr(
+        editor,
+        "_paste_body_on_page",
+        lambda page, markdown, styled=True: calls.append(("body", markdown)) or editor.OperationResult.success(value=markdown),
+    )
+
+    assert editor.fill_title(None, title="标题别名").status == "ok"
+    assert editor.fill_author(None, author="作者别名").status == "ok"
+    assert editor.fill_digest(None, digest="摘要别名").status == "ok"
+    assert editor.paste_body(None, body_markdown="正文别名").status == "ok"
+
+    assert ("title", "标题别名") in calls
+    assert ("author", "作者别名") in calls
+    assert ("digest", "摘要别名") in calls
+    assert ("body", "正文别名") in calls
+
+
 def test_collection_options_are_scoped_to_picker_dropdown():
     from agent_news.operations.wechat.publish_settings import _list_collection_options
 
