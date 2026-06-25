@@ -1,9 +1,7 @@
 """Cluster — union-find merge of discovery items into event clusters.
 
-Ported from the old project's pipeline.cluster_discovery_items (the union-find
-core at lines 517-527) but flattened: no scheduler, no state mutation, pure
-function returning clusters. The merge predicate uses token Jaccard overlap,
-only comparing items within a 24h window (freshness gate, old project line 529).
+No scheduler, no state mutation: pure functions return clusters. The merge
+predicate uses token Jaccard overlap, only comparing items within a 24h window.
 
 This is Stage 2. It is individually callable — the agent can re-cluster after
 adding new raw items without re-fetching sources.
@@ -19,7 +17,7 @@ from .tokenizer import jaccard
 
 # Two items merge if their token Jaccard similarity is at least this threshold.
 MERGE_THRESHOLD = 0.34
-# Only compare items within this time window — old news shouldn't cluster with new.
+# Only compare items within this time window; stale items should not cluster with fresh ones.
 WINDOW_HOURS = 24
 
 
@@ -123,8 +121,7 @@ def cluster_discovery_items(
 def event_id_for_cluster(cluster: list[DiscoveryItem]) -> str:
     """Deterministic event id from the cluster's canonical links + dedupe keys.
 
-    Same cluster → same id across runs (idempotent upsert). Mirrors the old
-    project's evt-<sha1[:12]> scheme.
+    Same cluster → same id across runs (idempotent upsert).
     """
     parts = sorted({item.canonical_link or item.dedupe_key or item.link for item in cluster if item})
     raw = "|".join(parts) or "|".join(item.title for item in cluster)

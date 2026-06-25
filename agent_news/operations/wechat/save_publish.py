@@ -1,6 +1,6 @@
 """WeChat save & publish operations.
 
-Ported from auto-news-studio editor.py. All run inside BROWSER_MANAGER.with_session.
+All run inside BROWSER_MANAGER.with_session.
 - save_as_draft: click 保存为草稿
 - click_publish / confirm_publish_modal / continue_publish: step 1/2/3 of publish
 - wait_qrcode: step 4 poll wechat_verify_qrcode, screenshot
@@ -40,6 +40,45 @@ def _require_editor(page) -> OperationResult | None:
     return None
 
 
+def _read_body_word_count_state(page) -> dict:
+    """Read WeChat's own bottom-bar body word count, with body text fallback."""
+    body_selector = pick_selector(page, _selectors("editor"), timeout=1000)
+    body = read_locator_value(page, body_selector, rich_text=True).strip() if body_selector else ""
+    count_selector = pick_selector(page, _selectors("body_word_count"), timeout=1000)
+    count_text = read_locator_value(page, count_selector).strip() if count_selector else ""
+    parsed_count = None
+    if count_text:
+        import re
+
+        match = re.search(r"\d+", count_text.replace(",", ""))
+        if match:
+            parsed_count = int(match.group(0))
+    fallback_count = len(body)
+    effective_count = parsed_count if parsed_count is not None else fallback_count
+    return {
+        "body_word_count": effective_count,
+        "body_word_count_text": count_text,
+        "body_word_count_selector": count_selector,
+        "body_word_count_source": "wechat_counter" if parsed_count is not None else "body_text_fallback",
+        "body_length": fallback_count,
+        "body_selector": body_selector,
+        "body_has_content": effective_count > 0,
+    }
+
+
+def _body_word_count_result(page) -> OperationResult:
+    guard = _require_editor(page)
+    if guard is not None:
+        return guard
+    state = _read_body_word_count_state(page)
+    if not state.get("body_has_content"):
+        return OperationResult.failure(
+            message="正文字数为 0，禁止保存草稿或发表",
+            **state,
+        )
+    return OperationResult.success(message=f"正文字数校验通过：{state['body_word_count']}", **state)
+
+
 def _read_publish_preflight_state(
     page,
     *,
@@ -57,6 +96,7 @@ def _read_publish_preflight_state(
     title = read_locator_value(page, title_selector).strip() if title_selector else ""
     author = read_locator_value(page, author_selector).strip() if author_selector else ""
     body = read_locator_value(page, body_selector, rich_text=True).strip() if body_selector else ""
+    body_count_state = _read_body_word_count_state(page)
 
     try:
         from .cover import _read_cover_preview_state
@@ -134,7 +174,7 @@ def _read_publish_preflight_state(
     checks = {
         "title": bool(title),
         "author": bool(author) if require_author else True,
-        "body": bool(body),
+        "body": bool(body) and bool(body_count_state.get("body_has_content")),
         "cover": bool(cover_state.get("hasCover")) if require_cover else True,
         "original": bool(settings_state.get("original", {}).get("ok") or settings_state.get("original", {}).get("checked")) if require_original else True,
         "reward": bool(settings_state.get("reward", {}).get("checked")) if require_reward else True,
@@ -148,7 +188,11 @@ def _read_publish_preflight_state(
         "checks": checks,
         "title": title,
         "author": author,
-        "body_length": len(body),
+        "body_length": body_count_state.get("body_length", len(body)),
+        "body_word_count": body_count_state.get("body_word_count", 0),
+        "body_word_count_text": body_count_state.get("body_word_count_text", ""),
+        "body_word_count_selector": body_count_state.get("body_word_count_selector"),
+        "body_word_count_source": body_count_state.get("body_word_count_source", ""),
         "cover": cover_state,
         "settings": settings_state,
         "requirements": {
@@ -180,6 +224,9 @@ def _save_current_editor_as_draft(page) -> OperationResult:
     guard = _require_editor(page)
     if guard is not None:
         return guard
+    body_count = _body_word_count_result(page)
+    if body_count.status == "failed":
+        return body_count
     selector = click_required_selector_once(
         page, _selectors("save_draft_button"),
         step_name="save_as_draft", timeout=6000, settle_ms=3500,
@@ -188,7 +235,11 @@ def _save_current_editor_as_draft(page) -> OperationResult:
     left_editor = "action=edit" not in after_url and "appmsg_edit" not in after_url
     return OperationResult.success(
         message="已点击保存草稿" + ("，页面已离开编辑器" if left_editor else "（仍在编辑页，可能需复查）"),
-        url=after_url, selector=selector, left_editor=left_editor,
+        url=after_url,
+        selector=selector,
+        left_editor=left_editor,
+        body_word_count=body_count.state.get("body_word_count", 0),
+        body_word_count_source=body_count.state.get("body_word_count_source", ""),
     )
 
 
@@ -235,14 +286,86 @@ def _publish_current_editor_to_qrcode(
         return OperationResult.failure(message=f"step1 点击发表失败: {e}", step_logs=step_logs)
 
     # step 2: 二次确认
+    pre_click_url = page_url(page)
     try:
-        click_required_selector_once(
+        selector = click_required_selector_once(
             page, _selectors("publish_modal_button"),
             step_name="confirm_publish_modal", timeout=6000, settle_ms=1800,
         )
-        step_logs.append("step2 已二次确认")
+        step_logs.append(f"step2 已二次确认 (selector={selector})")
+        # 检查是否真的跳转了（排除点击了 h3 标题等非确认元素的情况）
+        page.wait_for_timeout(2000)
+        post_click_url = page_url(page)
+        if post_click_url == pre_click_url:
+            # URL 没变，说明点击了错误的元素（如 h3 标题）
+            step_logs.append("step2b URL未变化，尝试JS点击确认按钮")
+            clicked = page.evaluate("""() => {
+                const dialog = document.querySelector('.weui-desktop-dialog__wrp');
+                if (!dialog) return 'no dialog';
+                const ft = dialog.querySelector('.weui-desktop-dialog__ft');
+                if (ft) {
+                    const btn = ft.querySelector('button, [role="button"], .weui-desktop-btn_primary, a');
+                    if (btn) { btn.click(); return 'clicked ft btn: ' + btn.textContent?.trim(); }
+                }
+                const candidates = dialog.querySelectorAll('.weui-desktop-btn_primary, button.weui-desktop-btn');
+                for (const c of candidates) {
+                    const rect = c.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) { c.click(); return 'clicked candidate'; }
+                }
+                return 'no confirm btn found';
+            }""")
+            step_logs.append(f"step2c JS结果: {clicked}")
+            page.wait_for_timeout(2000)
     except Exception as e:
         step_logs.append(f"step2 二次确认未出现: {e}")
+        # 弹窗可能是发表选项面板而非确认弹窗
+        # 策略：用 JS 获取弹窗结构并尝试点击确认按钮
+        try:
+            result = page.evaluate("""() => {
+                const dialog = document.querySelector('.weui-desktop-dialog__wrp');
+                if (!dialog) return JSON.stringify({status: 'no dialog'});
+                const info = [];
+                const allEls = dialog.querySelectorAll('button, [role="button"], a, input[type="submit"], .weui-desktop-btn, .weui-desktop-dialog__ft, .weui-desktop-dialog__bd');
+                for (const el of allEls) {
+                    const rect = el.getBoundingClientRect();
+                    const visible = rect.width > 0 && rect.height > 0;
+                    info.push({
+                        tag: el.tagName,
+                        class: el.className?.substring(0, 80),
+                        text: el.textContent?.trim()?.substring(0, 50),
+                        visible: visible,
+                        rect: {x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height)}
+                    });
+                }
+                const ft = dialog.querySelector('.weui-desktop-dialog__ft');
+                if (ft) {
+                    info.push({tag: 'FT-AREA', class: ft.className, text: ft.textContent?.trim()?.substring(0, 100), html: ft.innerHTML?.substring(0, 500)});
+                }
+                return JSON.stringify({status: 'found', elements: info});
+            }""")
+            step_logs.append(f"step2b 弹窗结构: {result[:300]}")
+            # 尝试点击弹窗 footer 区域的确认按钮
+            clicked = page.evaluate("""() => {
+                const dialog = document.querySelector('.weui-desktop-dialog__wrp');
+                if (!dialog) return 'no dialog';
+                // 优先找 footer 区域的按钮
+                const ft = dialog.querySelector('.weui-desktop-dialog__ft');
+                if (ft) {
+                    const btn = ft.querySelector('button, [role="button"], .weui-desktop-btn_primary, a');
+                    if (btn) { btn.click(); return 'clicked ft btn'; }
+                }
+                // 找弹窗内任何可见的确认类按钮
+                const candidates = dialog.querySelectorAll('.weui-desktop-btn_primary, button.weui-desktop-btn, [class*="confirm"], [class*="submit"]');
+                for (const c of candidates) {
+                    const rect = c.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) { c.click(); return 'clicked candidate'; }
+                }
+                return 'no confirm btn';
+            }""")
+            step_logs.append(f"step2c 点击结果: {clicked}")
+            page.wait_for_timeout(2000)
+        except Exception as js_e:
+            step_logs.append(f"step2b/c 失败: {js_e}")
 
     # step 3: 继续发表循环
     continue_clicks = 0
@@ -294,6 +417,22 @@ def save_as_draft(ctx) -> OperationResult:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run)
     except Exception as e:
         return OperationResult.failure(message=f"save_as_draft 失败: {type(e).__name__}: {e}")
+
+
+@operation(
+    name="wechat.inspect_body_word_count",
+    category="save_publish",
+    description="只读：读取微信底部“正文字数”计数；为 0 时保存草稿和发表都会被拦截。",
+    params={},
+)
+def inspect_body_word_count(ctx) -> OperationResult:
+    def _run(_context, page):
+        return _body_word_count_result(page)
+
+    try:
+        return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run, reset_on_failure=False)
+    except Exception as e:
+        return OperationResult.failure(message=f"inspect_body_word_count 失败: {type(e).__name__}: {e}")
 
 
 @operation(
@@ -362,6 +501,9 @@ def click_publish(ctx) -> OperationResult:
         guard = _require_editor(page)
         if guard is not None:
             return guard
+        body_count = _body_word_count_result(page)
+        if body_count.status == "failed":
+            return body_count
         try:
             selector = click_required_selector_once(
                 page, _selectors("article_publish_button"),

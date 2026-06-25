@@ -1,4 +1,4 @@
-"""Browser package — persistent manager (ported from old project) + DOM helpers."""
+"""Browser package — persistent manager + DOM helpers."""
 
 from .manager import (
     BROWSER_MANAGER,

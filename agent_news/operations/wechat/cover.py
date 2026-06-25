@@ -1,10 +1,8 @@
 """WeChat cover operations + dynamic option discovery.
 
-Ported from auto-news-studio. Faithful-port API style.
 - generate_ai_cover(prompt): parameterized, skippable (empty prompt -> skip).
   Walks cover_button -> ai_image_button -> fill prompt -> send -> poll
-  ai_image_generated_tip -> use -> confirm. Old project ran this unconditionally
-  in the publish path; here the AI decides.
+  ai_image_generated_tip -> use -> confirm. The AI decides whether to run it.
 - list_collections / list_claim_sources: let the AI SEE what options exist
   before choosing. This directly solves "合集/创作来源需要 AI 自己识别": the agent
   calls list_* first, reads the options, then calls set_collection /
@@ -416,7 +414,7 @@ def _read_cover_preview_state(page) -> dict:
     description=(
         "生成 AI 封面。prompt 为封面描述（如 一个iPhone图标）；"
         "传 prompt 为空则跳过封面生成。"
-        "旧项目在发表路径固定生成；现在 AI 可自由决定要不要封面。"
+        "AI 可自由决定要不要封面。"
     ),
     params={
         "prompt": "封面描述文本；空则跳过",
@@ -586,14 +584,14 @@ def inspect_cover_picker(ctx) -> OperationResult:
     description=(
         "只读：打开合集选择器，列出当前账号可选的所有合集名称。"
         "AI 先调这个看清有哪些合集，再决定用 set_collection 选哪个——"
-        "彻底替代旧项目硬编码 AI新闻。"
+        "不要硬编码 AI新闻。"
     ),
     params={},
 )
 def list_collections(ctx) -> OperationResult:
-    """List available collections. Ported from _trigger_collection_picker_dropdown.
+    """List available collections.
 
-    Uses the PRECISE selector chain from the old project:
+    Uses a scoped selector chain:
     1. Open #js_article_tags_area (collection_setting)
     2. Click input[placeholder='请选择合集'] (collection_picker_input)
     3. Read ONLY from .setting-con .select-opts-con li.select-opt-li
@@ -636,12 +634,12 @@ def list_collections(ctx) -> OperationResult:
     description=(
         "只读：打开创作来源选择器，列出所有可选来源名称。"
         "AI 先调这个看清有哪些来源，再决定用 set_claim_source 选哪个——"
-        "彻底替代旧项目硬编码 个人观点，仅供参考。"
+        "不要硬编码 个人观点，仅供参考。"
     ),
     params={},
 )
 def list_claim_sources(ctx) -> OperationResult:
-    """List available claim sources. Uses the old project's radio label selectors:
+    """List available claim sources. Uses the local radio label selectors:
     #js_claim_source_area label.weui-desktop-form__check-label + input[type=radio].
     """
     def _run(_context, page):

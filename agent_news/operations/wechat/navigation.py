@@ -1,11 +1,10 @@
 """WeChat navigation + login operations.
 
-FAITHFUL PORT of auto-news-studio session.py login detection:
 - open_dashboard: navigate to mp.weixin.qq.com (no login check)
 - check_login: real DOM login verification (3 selectors, 1200ms each, first hit wins) + screenshot
 - session: read-only manager state
 
-The login detection uses ONLY DOM selectors (no cookie check — matches old project).
+The login detection uses ONLY DOM selectors (no cookie check).
 Selectors: .weui-desktop-account__thumb, .weui-desktop-layout__main, .weui-desktop-side-menu
 """
 
@@ -33,12 +32,12 @@ def _selectors(key: str) -> list[str]:
     category="navigation",
     description=(
         "打开公众号后台首页（mp.weixin.qq.com）。不验证登录态，只导航 + 记录 URL。"
-        "照搬旧项目 launch_wechat_dashboard。用 Edge 浏览器。"
+        "使用本项目持久 Edge 浏览器会话。"
     ),
     params={},
 )
 def open_dashboard(ctx) -> OperationResult:
-    """Navigate to WeChat MP home. Ported from launch_wechat_dashboard (session.py:189)."""
+    """Navigate to WeChat MP home."""
     entry_url = _CHANNEL["publish_entry_url"]
 
     def _run(_context, page):
@@ -67,12 +66,11 @@ def open_dashboard(ctx) -> OperationResult:
     description=(
         "真实 DOM 登录检测：访问 mp.weixin.qq.com，用 3 个选择器（1200ms 各）"
         "判断是否已登录。总是全页截图。未登录时截图含二维码。"
-        "照搬旧项目 inspect_wechat_session。"
     ),
     params={},
 )
 def check_login(ctx) -> OperationResult:
-    """Real DOM login verification. Ported from inspect_wechat_session (session.py:222).
+    """Real DOM login verification.
 
     Loops the logged_in selectors with wait_for_selector(timeout=1200), first
     match = logged in. Always takes a full-page screenshot (contains QR if not
@@ -141,7 +139,6 @@ def check_login(ctx) -> OperationResult:
     description=(
         "只读：返回浏览器会话状态。合并 manager 状态 + 当前页面观测。"
         "字段：manager_alive, busy, resident_page, last_error, current_url, is_editor_page。"
-        "照搬旧项目 refresh_browser_session 合并 manager_state + 页面 URL 的模式。"
     ),
     params={},
 )
@@ -216,7 +213,7 @@ def open_new_editor(ctx) -> OperationResult:
     params={},
 )
 def open_draft_box(ctx) -> OperationResult:
-    """Open the draft box. Ported from _open_wechat_draft_box (old drafts.py:14-79).
+    """Open the draft box.
 
     Two-step nav: (1) expand content_manage sidebar, (2) click the draft_box
     link (with goto fallback if click fails). Confirms URL contains

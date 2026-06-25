@@ -1,7 +1,6 @@
 """Article & material models.
 
-Two levels, mirroring the old project's proven dual-level brief design
-(rule material vs article finished), but simplified:
+Two levels:
 
 - Material: the research/source pack (facts, quotes, timeline, sources)
 - Article : the finished, publishable piece (title, markdown body, digest)

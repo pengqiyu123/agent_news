@@ -1,8 +1,7 @@
 """Workflow session model — centralized state machine.
 
-This directly fixes the old project's flaw: workflow transitions were scattered
-string literals across one 300-line method (briefs_mixin.py:687-996 in
-auto-news-studio), easy to leave stuck in "running".
+Workflow transitions are declared in one place, so operations cannot leave a
+session stuck in an ambiguous running state.
 
 Here, legal transitions are declared in one place (ALLOWED_TRANSITIONS) and
 enforced by transition_to(). An illegal transition is rejected, never silently
@@ -143,8 +142,7 @@ class WorkflowSession(BaseModel):
         """Validate and apply a state transition.
 
         Raises IllegalTransitionError if target is not in ALLOWED_TRANSITIONS
-        for the current state. This is the single chokepoint that replaces the
-        old project's scattered string-literal transitions.
+        for the current state. This is the single chokepoint for state changes.
         """
         if self.state in TERMINAL_STATES:
             raise IllegalTransitionError(

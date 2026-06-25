@@ -4,9 +4,8 @@ Each stage of the radar (collect → normalize → cluster → score → deep-di
 an independently-callable operation registered in OPERATION_REGISTRY. The agent
 can run any one alone, or chain them via the batch endpoint.
 
-This is the direct realization of the project's core principle: the old project
-fused these into one build_intel_state call driven by a scheduler; here every
-stage is its own operation that fails or succeeds in isolation.
+This is the direct realization of the project's core principle: every stage is
+its own operation that fails or succeeds in isolation.
 
 All operations are pure-of-side-effect except DB writes (via intel repository)
 and network fetches (RSS / deep-dive source URLs). They never raise for

@@ -1,9 +1,8 @@
-"""WeChat MP selector profiles — FAITHFUL COPY from auto-news-studio browser_base.py:36-235.
+"""WeChat MP selector profiles.
 
-Every selector is copied verbatim. Do not "improve" them — they are tuned to
-the real WeChat MP DOM. When WeChat changes their DOM, add a new selector to
-the FRONT of the list (keeping old ones as fallback), matching the old project's
-strategy.
+These selectors are tuned to the real WeChat MP DOM and are part of this
+project's public automation contract. When WeChat changes its DOM, add a new
+selector to the FRONT of the relevant list and keep old ones as fallbacks.
 """
 
 from __future__ import annotations
@@ -68,6 +67,11 @@ WECHAT_MP_V1: dict[str, list[str]] = {
         "div.ProseMirror:has(.editor_content_placeholder)",
         ".rich_media_content [contenteditable='true']",
         ".rich_media_content",
+    ],
+    "body_word_count": [
+        "#bot_bar_left_container .js_word_count",
+        "#word_count_container .js_word_count",
+        ".js_word_count",
     ],
     "save_draft_button": [
         "button:has-text('保存为草稿')",
@@ -170,11 +174,15 @@ WECHAT_MP_V1: dict[str, list[str]] = {
         "button.mass_send:has-text('发表')",
     ],
     "publish_modal_button": [
+        ".weui-desktop-dialog__wrp :text-is('发表')",
         ".weui-desktop-popover__wrp .weui-desktop-btn_wrp[slot='target'] button.weui-desktop-btn_primary:has-text('发表')",
         ".weui-desktop-popover__wrp button.weui-desktop-btn_primary:has-text('发表')",
         ".weui-desktop-dialog__wrp button.weui-desktop-btn_primary:has-text('发表')",
         ".weui-dialog button.weui-desktop-btn_primary:has-text('发表')",
         "[role='dialog'] button.weui-desktop-btn_primary:has-text('发表')",
+        ".weui-desktop-dialog__wrp .weui-desktop-dialog__bd a:has-text('发表')",
+        ".weui-desktop-dialog__wrp .weui-desktop-dialog__bd div:has-text('发表')",
+        ".weui-desktop-dialog__wrp [class*='send'] :has-text('发表')",
     ],
     "continue_publish_button": [
         "button.weui-desktop-btn_primary:has-text('继续发表')",

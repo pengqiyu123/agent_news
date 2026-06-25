@@ -1,7 +1,7 @@
 """Score — hotness scoring + event materialization.
 
 Stage 3. Computes the composite hotness score for each cluster and turns
-clusters into IntelEvent objects. The formula mirrors the old project:
+clusters into IntelEvent objects:
 
     composite = velocity*0.28 + coverage*0.22 + freshness*0.20 + audience_fit*0.30
 
@@ -133,7 +133,7 @@ def classify_alert_state(
 ) -> tuple[str, str]:
     """Return (alert_state, alert_reason).
 
-    Thresholds mirror the old project's intuition:
+    Thresholds:
     - hot: high composite AND high velocity
     - rising: meaningful growth delta
     - cooling: was hot/rising but composite dropped

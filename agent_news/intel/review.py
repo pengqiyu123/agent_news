@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..models.intel import EventDeepDive, IntelAlert, IntelEvent, RawItem, Source
+from .writing_guide import build_article_writing_guide
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -227,6 +228,7 @@ def writing_readiness_for_dive(dive: EventDeepDive) -> str:
 def review_deep_dive_state(dive: EventDeepDive, event: IntelEvent | None = None) -> dict[str, Any]:
     source_results = [source_result_from_dive_source(source) for source in (dive.sources or dive.full_text_sources)]
     readiness = writing_readiness_for_dive(dive)
+    article_writing_guide = dive.article_writing_guide or build_article_writing_guide()
     risks: list[str] = []
     if dive.success_count == 0:
         risks.append("没有成功来源")
@@ -252,9 +254,10 @@ def review_deep_dive_state(dive: EventDeepDive, event: IntelEvent | None = None)
         "success_count": dive.success_count,
         "failed_count": dive.failed_count,
         "source_results": source_results,
+        "article_writing_guide": article_writing_guide,
         "risks": risks,
         "worthiness": dive.worthiness,
         "suggested_next_operation": "article.create"
-        if readiness in ("ready", "partial")
+        if readiness == "ready"
         else "radar.deep_dive_event",
     }

@@ -1,8 +1,7 @@
 """Tokenizer — lightweight title/anchor token extraction.
 
-Ported from the old project's intel/tokenizer.py, minus jieba (which the old
-project did NOT actually use — clustering is hand-rolled n-gram overlap). We
-keep it dependency-free so the radar works without any NLP library installed.
+Clustering is hand-rolled n-gram overlap. We keep it dependency-free so the
+radar works without any NLP library installed.
 
 Two token kinds:
 - title_tokens: word-ish n-grams from the title (for clustering similarity)

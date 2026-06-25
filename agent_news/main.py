@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
 
     The browser itself launches lazily on the first with_session call, but the
     worker thread (required for Playwright thread affinity) starts now so the
-    first operation is fast. Modeled on old project's FastAPI lifespan pattern.
+    first operation is fast.
     """
     BROWSER_MANAGER.startup()
     try:

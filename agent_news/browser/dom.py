@@ -1,8 +1,8 @@
-"""DOM helpers — ported from auto-news-studio publishers/wechat/dom.py + browser_base.py.
+"""DOM helpers for the WeChat editor and settings pages.
 
 The clipboard paste mechanism (_clipboard_paste_text / _clipboard_paste_into_element)
-is the reliable body-fill method verified in the old project. Selector picking
-(_pick_selector / _pick_visible_locator) tries a list in order, first visible match wins.
+is the reliable body-fill method for WeChat's rich editor. Selector picking tries
+a list in order, first visible match wins.
 """
 
 from __future__ import annotations
@@ -56,8 +56,7 @@ def pick_required_selector(
 def dismiss_wechat_hover_popovers(page) -> None:
     """Best-effort cleanup for WeChat hover/dialog layers that intercept clicks.
 
-    Ported from old project's _dismiss_wechat_hover_popovers and extended with
-    the layers observed during reward-setting validation.
+    Extended with the layers observed during reward-setting validation.
     """
     try:
         try:
@@ -109,7 +108,7 @@ def click_first_visible(page, selectors: list[str], *, timeout: int = 4000) -> b
 def click_required_selector_once(
     page, selectors: list[str], *, step_name: str, timeout: int = 6000, settle_ms: int = 1200
 ) -> str:
-    """Pick + click + settle. Raises if no visible selector. Ported from editor.py:99-128."""
+    """Pick + click + settle. Raises if no visible selector."""
     selector = pick_required_selector(page, selectors, step_name=step_name, timeout=timeout)
     _click_locator_with_fallback(page, page.locator(selector).first, timeout=timeout)
     if settle_ms > 0:
@@ -120,8 +119,7 @@ def click_required_selector_once(
 def clipboard_paste_text(page, text: str) -> None:
     """Put text on the clipboard via a hidden textarea, then paste with Ctrl+V.
 
-    FAITHFUL COPY of auto-news-studio dom.py:70-84. This is the reliable way
-    to fill long content into WeChat's ProseMirror editor.
+    This is the reliable way to fill long content into WeChat's ProseMirror editor.
     """
     page.evaluate(
         """(text) => {
@@ -142,7 +140,7 @@ def clipboard_paste_text(page, text: str) -> None:
 def clipboard_paste_into_element(page, selector: str, text: str) -> None:
     """Click an element, select-all, then paste text into it via clipboard.
 
-    FAITHFUL COPY of auto-news-studio dom.py:86-93.
+    Used as a fallback when direct field fill/type does not work.
     """
     loc = page.locator(selector).first
     loc.click(timeout=4000)
@@ -156,7 +154,7 @@ def clipboard_paste_into_element(page, selector: str, text: str) -> None:
 def write_plain_field(page, selectors: list[str], value: str, *, field_label: str = "field") -> str:
     """Fill a plain input (title/author/digest). Tries fill(), then type(), then paste.
 
-    Ported from _write_plain_field (dom.py:175-198). Returns the selector used.
+    Returns the selector used.
     """
     selector = pick_required_selector(page, selectors, step_name=f"write_{field_label}")
     loc = page.locator(selector).first
@@ -176,7 +174,6 @@ def write_plain_field(page, selectors: list[str], value: str, *, field_label: st
 def select_hidden_option_by_text(page, text: str, *, dropdown_selector: str = ".select-opt-li, li") -> bool:
     """Click a hidden dropdown option by its visible text via synthetic events.
 
-    Ported from _select_hidden_wechat_option_by_text (editor.py:211-239).
     Used for dynamic collection selection (parameterized, not hardcoded).
     """
     return bool(

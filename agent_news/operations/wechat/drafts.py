@@ -1,13 +1,8 @@
 """WeChat existing-draft operations.
 
-FAITHFUL PORT of auto-news-studio. The draft card location + edit button click
-logic is copied verbatim from:
-- _scrape_wechat_draft_items_strict (drafts.py:81-159)
-- _is_wechat_editor_url (editor.py:1027-1035)
-- _click_wechat_draft_edit_button_by_title (editor.py:1045-1136)
-- _open_existing_wechat_draft_editor (editor.py:979-1025)
-
-DO NOT reinvent the DOM selectors — they are tuned to the real WeChat MP UI.
+The draft card location and edit-button click logic are part of this project's
+own WeChat automation contract. Do not reinvent these DOM selectors without a
+real-browser regression test.
 """
 
 from __future__ import annotations
@@ -29,7 +24,6 @@ def _selectors(key: str) -> list[str]:
 def _open_draft_box_on_page(page) -> bool:
     """Navigate to the draft box: home → expand content_manage → click draft_box.
 
-    Ported from _open_wechat_draft_box (old drafts.py:14-79).
     Returns True if URL contains action=list_card.
     """
     page.goto(WECHAT_HOME_URL, wait_until="domcontentloaded", timeout=30000)
@@ -76,7 +70,6 @@ def _open_draft_box_on_page(page) -> bool:
 def _scrape_draft_items(page) -> list[dict]:
     """Scrape draft card titles + URLs from the draft box page.
 
-    VERBATIM PORT of _scrape_wechat_draft_items_strict (old drafts.py:81-159).
     Selector: .publish_card_container, .weui-desktop-card.weui-desktop-publish,
     .weui-desktop-media__list-col .weui-desktop-card.
     """
@@ -127,7 +120,7 @@ def _scrape_draft_items(page) -> list[dict]:
 
 
 def _is_editor_url(url: str) -> bool:
-    """Ported from _is_wechat_editor_url (old editor.py:1027-1035)."""
+    """Return whether a WeChat URL is an editor URL, not a preview/list page."""
     normalized = str(url or "")
     if not normalized:
         return False
@@ -170,7 +163,7 @@ def _find_draft_by_title(items: list[dict], title: str) -> dict | None:
 def _click_edit_button_by_title(page, title: str) -> dict:
     """Click the edit button on a draft card matching the title.
 
-    VERBATIM PORT of _click_wechat_draft_edit_button_by_title (old editor.py:1045-1136).
+    Uses only the action area, avoiding title/cover/preview links.
     """
     compact_title = _normalize_title(title)
     result = page.evaluate(
@@ -292,7 +285,7 @@ def _open_existing_draft_editor_on_page(context, page, title: str) -> OperationR
         page.wait_for_timeout(2500)
 
     # 4. converge to editor tab — POLL for up to 12s (editor opens in new tab)
-    # Ported from _locate_editor_page (old session.py:74-97).
+    # The editor often opens in a new tab, so poll briefly for action=edit.
     import time as _time
     deadline = _time.time() + 12
     editor_page = None
@@ -328,7 +321,6 @@ def _open_existing_draft_editor_on_page(context, page, title: str) -> OperationR
                 pass
 
     # Rebind the manager's working page to the editor tab.
-    # Ported from old project editor.py:1018: WECHAT_BROWSER_MANAGER._page = editor_page
     BROWSER_MANAGER._page = editor_page  # noqa: SLF001
 
     editor_url = page_url(editor_page)
@@ -350,12 +342,11 @@ def _open_existing_draft_editor_on_page(context, page, title: str) -> OperationR
         "打开草稿箱里一个已有草稿进入编辑页。"
         "通过草稿标题定位目标草稿，点击其操作区编辑按钮（不点标题/封面/预览链接）。"
         "成功标志：最终 URL 含 action=edit。"
-        "照搬旧项目 _open_existing_wechat_draft_editor 全链路。"
     ),
     params={"title": "必填，目标草稿的标题（部分匹配即可，18字以上模糊匹配）"},
 )
 def open_existing_draft(ctx, title: str) -> OperationResult:
-    """Open an existing draft for editing. Ported from _open_existing_wechat_draft_editor."""
+    """Open an existing draft for editing."""
     if not title:
         return OperationResult.failure(message="title 为空，无法定位草稿")
 

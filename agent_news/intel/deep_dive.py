@@ -1,8 +1,7 @@
 """Deep dive — fetch source full text and extract facts/quotes/timeline.
 
-Stage 4. This is rule-based extraction (the old project does NOT call an LLM
-for the core deep dive — authorship is the external AI's job). We fetch each
-event's source URLs, extract clean text, and pull out:
+Stage 4. This is rule-based extraction: authorship is the external AI's job.
+We fetch each event's source URLs, extract clean text, and pull out:
 - facts: declarative sentences with numbers/dates/verbs of assertion
 - quotes: text inside quotation marks
 - timeline: sentences with date/time markers

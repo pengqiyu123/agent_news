@@ -1,9 +1,9 @@
-"""Default sources inherited from the old Auto News Studio project.
+"""Default information sources bundled with agent-news.
 
-These are not random bootstrap examples. They are the long-used production
-source pool from ``auto-news-studio``: RSS/WordPress feeds, hotlists, community
-sources, and YouTube monitors. Seeding is additive so existing installs can
-pull in newly-added defaults without clearing their local source table.
+These are not random bootstrap examples. They are the project-maintained source
+pool: RSS/WordPress feeds, hotlists, community sources, and YouTube monitors.
+Seeding is additive so existing installs can pull in newly-added defaults
+without clearing their local source table.
 """
 
 from __future__ import annotations
@@ -42,8 +42,6 @@ def _source(
             "driver": driver,
             "platform": platform or kind,
             "auth": auth or {},
-            "origin_repo": "auto-news-studio",
-            "origin_license": "MIT",
             "validated_default": True,
         },
     )
@@ -150,7 +148,7 @@ def _yt(
 
 
 def default_sources() -> list[Source]:
-    """Return the full old-project source pool plus a few new aliases."""
+    """Return the bundled production source pool."""
     return [
         _rss("rss-openai", "OpenAI Blog", "https://openai.com/blog/rss.xml", priority=9, tags=["ai", "official"], weight=0.9),
         _rss("openai-blog", "OpenAI News", "https://openai.com/news/rss.xml", priority=90, tags=["ai", "openai", "official"], weight=0.9),

@@ -1,8 +1,8 @@
 """WeChat editor fill operations — title / author / digest / body.
 
-Ported from auto-news-studio editor.py + dom.py. Each runs inside
-BROWSER_MANAGER.with_session. The editor must be open first.
-paste_body uses clipboard paste — the reliable method for long content.
+Each operation runs inside BROWSER_MANAGER.with_session. The editor must be
+open first. paste_body writes rich HTML first and uses clipboard paste as a
+fallback for long content.
 """
 
 from __future__ import annotations
@@ -131,7 +131,55 @@ def _paste_body_on_page(page, markdown: str, *, styled: bool = True) -> Operatio
     except Exception:
         pass
 
-    # Strategy 2: clipboard paste fallback (ported from _clipboard_paste_into_element).
+    # Strategy 2: browser editing command. ProseMirror often tracks DOM edits
+    # through input events better when content is inserted as an editing action.
+    try:
+        page.evaluate(
+            """({ selector, html, text }) => {
+                const node = document.querySelector(selector);
+                if (!node) return;
+                node.focus();
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                document.execCommand('delete', false, null);
+                const safeHtml = html || String(text || '')
+                    .split(/\\n+/)
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+                    .map((item) => '<p>' + item.replace(/[&<>"']/g, (ch) => ({
+                        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                    }[ch])) + '</p>')
+                    .join('');
+                if (safeHtml) {
+                    document.execCommand('insertHTML', false, safeHtml);
+                } else {
+                    document.execCommand('insertText', false, String(text || ''));
+                }
+                node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: node.innerText || '' }));
+                node.dispatchEvent(new Event('change', { bubbles: true }));
+            }""",
+            {"selector": selector, "html": body_html, "text": body_text},
+        )
+        page.wait_for_timeout(900)
+        actual = read_locator_value(page, selector, rich_text=True)
+        if len(actual.strip()) >= minimum_length:
+            return OperationResult.success(
+                message=f"正文已写入（insertHTML）：{len(actual)} 字符",
+                selector=selector,
+                char_count=len(actual),
+                strategy="insertHTML",
+                styled=styled,
+                normalized_newlines=input_markdown != original_markdown,
+                stripped_title=bool(prepared["stripped_title"]),
+                title=current_title,
+            )
+    except Exception:
+        pass
+
+    # Strategy 3: clipboard paste fallback.
     page.keyboard.press("Control+a")
     page.wait_for_timeout(200)
     page.keyboard.press("Delete")
@@ -157,17 +205,18 @@ def _paste_body_on_page(page, markdown: str, *, styled: bool = True) -> Operatio
     name="wechat.fill_title",
     category="editor",
     description="在编辑页填写文章标题。要求当前已在编辑页。",
-    params={"text": "必填，标题文本"},
+    params={"text": "必填，标题文本；兼容别名 title"},
 )
-def fill_title(ctx, text: str) -> OperationResult:
-    if not text:
+def fill_title(ctx, text: str = "", title: str = "") -> OperationResult:
+    value = str(text or title or "")
+    if not value:
         return OperationResult.skip(message="title 为空，跳过")
 
     def _run(_context, page):
         guard = _require_editor(page)
         if guard is not None:
             return guard
-        return _fill_title_on_page(page, text)
+        return _fill_title_on_page(page, value)
 
     try:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run)
@@ -183,19 +232,25 @@ def fill_title(ctx, text: str) -> OperationResult:
         "默认严格回读校验；若允许平台保留默认作者，可传 allow_platform_default=True。"
     ),
     params={
-        "text": "必填，作者名",
+        "text": "必填，作者名；兼容别名 author",
         "allow_platform_default": "bool，默认 False；True 时接受微信保留的默认作者",
     },
 )
-def fill_author(ctx, text: str, allow_platform_default: bool = False) -> OperationResult:
-    if not text:
+def fill_author(
+    ctx,
+    text: str = "",
+    author: str = "",
+    allow_platform_default: bool = False,
+) -> OperationResult:
+    value = str(text or author or "")
+    if not value:
         return OperationResult.skip(message="author 为空，跳过")
 
     def _run(_context, page):
         guard = _require_editor(page)
         if guard is not None:
             return guard
-        return _fill_author_on_page(page, text, allow_platform_default=allow_platform_default)
+        return _fill_author_on_page(page, value, allow_platform_default=allow_platform_default)
 
     try:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run)
@@ -207,17 +262,18 @@ def fill_author(ctx, text: str, allow_platform_default: bool = False) -> Operati
     name="wechat.fill_digest",
     category="editor",
     description="在编辑页填写摘要（最多120字符）。要求当前已在编辑页。",
-    params={"text": "必填，摘要文本"},
+    params={"text": "必填，摘要文本；兼容别名 digest"},
 )
-def fill_digest(ctx, text: str) -> OperationResult:
-    if not text:
+def fill_digest(ctx, text: str = "", digest: str = "") -> OperationResult:
+    value = str(text or digest or "")
+    if not value:
         return OperationResult.skip(message="digest 为空，跳过")
 
     def _run(_context, page):
         guard = _require_editor(page)
         if guard is not None:
             return guard
-        selector = write_plain_field(page, _selectors("digest_input"), text[:120], field_label="digest")
+        selector = write_plain_field(page, _selectors("digest_input"), value[:120], field_label="digest")
         actual = read_locator_value(page, selector)
         return OperationResult.success(message=f"摘要已填写：{actual[:40]}", selector=selector, value=actual)
 
@@ -235,19 +291,26 @@ def fill_digest(ctx, text: str) -> OperationResult:
         "支持标题、段落、列表、引用、加粗、行距和字号；失败时剪贴板兜底。要求当前已在编辑页。"
     ),
     params={
-        "markdown": "必填，正文 Markdown；支持真实换行，也兼容命令行传入的 \\n",
+        "markdown": "必填，正文 Markdown；兼容别名 body_markdown/body；支持真实换行，也兼容命令行传入的 \\n",
         "styled": "bool，默认 True；True 时转成带基础排版的微信 HTML",
     },
 )
-def paste_body(ctx, markdown: str, styled: bool = True) -> OperationResult:
-    if not markdown:
+def paste_body(
+    ctx,
+    markdown: str = "",
+    body_markdown: str = "",
+    body: str = "",
+    styled: bool = True,
+) -> OperationResult:
+    value = str(markdown or body_markdown or body or "")
+    if not value:
         return OperationResult.skip(message="body 为空，跳过")
 
     def _run(_context, page):
         guard = _require_editor(page)
         if guard is not None:
             return guard
-        return _paste_body_on_page(page, markdown, styled=styled)
+        return _paste_body_on_page(page, value, styled=styled)
 
     try:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run)

@@ -1,18 +1,15 @@
-"""Persistent browser manager — FAITHFUL PORT of auto-news-studio WechatBrowserManager.
+"""Persistent browser manager for the WeChat browser session.
 
 The browser PERSISTS because this manager (and its worker thread + Playwright
 context) lives in a long-running server process. This is the ONLY mechanism —
-no CDP, no daemon tricks. Same pattern as the old project's FastAPI lifespan.
+no CDP, no daemon tricks.
 
-Key invariants (copied verbatim from the old project):
+Key invariants:
 - Worker thread owns all Playwright objects (thread affinity).
 - Operations run via _run_in_worker(fn) → queue → worker thread.
 - with_session(channel, action_fn) is the single entry point: lock → ensure_page → action_fn(context, page).
 - ensure_context reuses if signature matches, else relaunches via launch_persistent_context.
 - Single-tab contract: extra tabs closed, editor page preferred.
-
-Source: auto-news-studio/backend/app/publishers/browser_manager.py
-        auto-news-studio/backend/app/publishers/browser_base.py
 """
 
 from __future__ import annotations
@@ -31,7 +28,7 @@ WECHAT_HOME_URL = "https://mp.weixin.qq.com/"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 60
 
 
-# ── Helpers ported verbatim from browser_base.py ────────────────────────────
+# ── Page liveness helpers ───────────────────────────────────────────────────
 def _is_page_closed(page) -> bool:
     if page is None:
         return True
@@ -93,7 +90,7 @@ def _is_initial_blank_page(page) -> bool:
     return _is_blank_page(page)
 
 
-# ── Channel helpers (ported from browser_base.py) ───────────────────────────
+# ── Channel helpers ─────────────────────────────────────────────────────────
 def normalize_browser_name(value: object | None) -> str:
     compact = str(value or "").strip().lower()
     if compact in {"edge", "chrome"}:
@@ -118,7 +115,7 @@ def resolve_profile_path(value: object | None, browser_name: object | None = Non
 
 
 def ensure_channel_defaults(channel: dict | None = None) -> dict:
-    """Normalize a channel dict. Copied from browser_base.py:336-344."""
+    """Normalize a channel dict for the resident WeChat browser."""
     next_channel = dict(channel or {})
     browser_name = normalize_browser_name(next_channel.get("browser_name"))
     next_channel["browser_name"] = browser_name
@@ -137,7 +134,7 @@ def default_wechat_channel() -> dict:
     return ensure_channel_defaults({})
 
 
-# ── BrowserManager — ported from WechatBrowserManager ───────────────────────
+# ── BrowserManager ──────────────────────────────────────────────────────────
 class BrowserManager:
     """Thread-safe singleton owning a persistent Playwright browser context.
 
@@ -159,7 +156,7 @@ class BrowserManager:
         self._last_reset_reason: str | None = None
         self._last_error: str | None = None
 
-    # ── Worker thread (ported from _ensure_worker / _worker_loop) ──────────
+    # ── Worker thread ───────────────────────────────────────────────────────
     def startup(self) -> None:
         self._ensure_worker()
 
@@ -343,7 +340,7 @@ class BrowserManager:
             str(normalized.get("selectors_version") or "wechat-mp-v1"),
         )
 
-    # ── Context / page management (ported from ensure_context / ensure_page) ─
+    # ── Context / page management ───────────────────────────────────────────
     def reset(self, reason: str = "") -> None:
         self._resident_page = f"reset:{reason or 'unknown'}"
         self._last_reset_reason = reason or "unknown"
@@ -408,14 +405,20 @@ class BrowserManager:
         live_pages = [item for item in _list_live_context_pages(context) if _can_interact_with_page(item)]
         page = self._pick_reusable_page(live_pages)
         created_page = False
+        create_error = None
         if page is None:
             try:
                 page = context.new_page()
                 created_page = True
-            except Exception:
+            except Exception as exc:
+                create_error = exc
                 page = None
         if page is None:
-            raise RuntimeError("违反单标签页约束：当前浏览器上下文中没有可复用标签页。")
+            page_urls = [_page_url_or_empty(candidate) for candidate in _list_live_context_pages(context)]
+            detail = f"page_count={len(page_urls)}, urls={page_urls}"
+            if create_error is not None:
+                detail += f", new_page_error={type(create_error).__name__}: {create_error}"
+            raise RuntimeError(f"违反单标签页约束：当前浏览器上下文中没有可复用标签页（{detail}）。")
         try:
             page.evaluate("() => { document.title = 'agent-news-微信专用'; }")
         except Exception:
@@ -475,7 +478,6 @@ class BrowserManager:
         self._page = None
         self._channel_signature = signature
         self._resident_page = "boot"
-        self._close_blank_pages(context)
         return context
 
     def ensure_page(self, channel: dict, entry_url: str):
@@ -518,7 +520,7 @@ class BrowserManager:
             except Exception:
                 pass
 
-    # ── The single entry point: with_session (ported verbatim) ──────────────
+    # ── The single entry point ──────────────────────────────────────────────
     def with_session(
         self,
         channel: dict | None = None,

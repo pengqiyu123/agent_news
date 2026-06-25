@@ -26,8 +26,7 @@ class OperationResult(BaseModel):
     """Normalized return value of every registered atomic operation.
 
     Design: a failed step never raises. It returns status=failed so the caller
-    (batch executor or AI) decides whether to stop, continue, or retry. This is
-    the direct fix for the old project's "one step fails, whole pipeline dies".
+    (batch executor or AI) decides whether to stop, continue, or retry.
     """
 
     status: OperationStatus

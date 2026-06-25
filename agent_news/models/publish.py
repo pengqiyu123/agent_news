@@ -26,7 +26,7 @@ class PublishRecord(BaseModel):
     """One article's published state on one platform, with engagement metrics.
 
     Metrics are populated by scraping the platform's publish history
-    (e.g. WeChat 内容管理 → 发表记录), mirroring the old project's pattern.
+    (e.g. WeChat 内容管理 → 发表记录).
     """
 
     id: str

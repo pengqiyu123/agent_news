@@ -1,14 +1,11 @@
 """WeChat publish-precheck operations.
 
-Ported from auto-news-studio. Faithful-port API style. The core fix for the
-old project's pain: these were hardcoded with no parameters and no skip.
-Here every step is parameterized and skippable.
+Every step is parameterized and skippable.
 
 - set_original(enabled): original declaration. enabled=False skips.
 - set_reward(enabled): reward. enabled=False skips.
 - set_collection(name): ANY collection name (not hardcoded AI新闻).
-  Uses the old project's scoped collection dropdown trigger + readback pattern,
-  but keeps the option text parameterized.
+  Uses a scoped collection dropdown trigger + readback pattern.
 - set_claim_source(name): ANY claim source (not hardcoded 个人观点，仅供参考).
 
 Each returns its own OperationResult; failure of one never touches the others.
@@ -188,8 +185,7 @@ def _click_setting_entry_by_selectors(page, selectors: list[str], *, step_name: 
 def _trigger_collection_picker_dropdown(page) -> dict:
     """Open the collection dropdown scoped to the collection picker.
 
-    Ported from old project's _trigger_collection_picker_dropdown, but kept
-    dynamic so any collection name can be selected by the agent.
+    Kept dynamic so any collection name can be selected by the agent.
     """
     state = page.evaluate(
         """() => {
@@ -377,8 +373,7 @@ def _read_collection_selection(page, name: str) -> dict:
 def _select_claim_source_option_by_text(page, name: str) -> dict:
     """Select the claim-source radio label by text.
 
-    Ported from old project's _select_claim_source_personal_by_event, but
-    parameterized for any source text.
+    Parameterized for any source text.
     """
     selected = page.evaluate(
         """({ name }) => {
@@ -492,7 +487,7 @@ def _read_claim_source_selection(page, name: str) -> dict:
     category="publish_settings",
     description=(
         "原创声明：开启(enabled=True)或跳过(enabled=False)。"
-        "旧项目固定开启、盲目点击两次；现在 AI 可自由控制。"
+        "AI 可自由控制。"
     ),
     params={"enabled": "bool，默认 True；False 则跳过本步"},
 )
@@ -625,7 +620,7 @@ def settle_publish_settings(ctx, max_clicks: int = 5) -> OperationResult:
     category="publish_settings",
     description=(
         "赞赏：开启(enabled=True)或跳过(enabled=False)。"
-        "旧项目固定开启；现在 AI 可自由控制。"
+        "AI 可自由控制。"
     ),
     params={"enabled": "bool，默认 True；False 则跳过本步"},
 )
@@ -657,7 +652,7 @@ def set_reward(ctx, enabled: bool = True) -> OperationResult:
     category="publish_settings",
     description=(
         "选择合集。name 参数为合集名称（如 AI新闻），由 AI 决定。"
-        "旧项目把 AI新闻 硬编码在 4 处；现在完全参数化。"
+        "完全参数化，不硬编码合集名。"
         "若 name 为空则跳过本步。"
     ),
     params={"name": "合集名称，如 AI新闻；空则跳过"},
@@ -728,7 +723,7 @@ def set_collection(ctx, name: str = "") -> OperationResult:
     category="publish_settings",
     description=(
         "选择创作来源。name 参数为来源名称（如 个人观点，仅供参考），由 AI 决定。"
-        "旧项目把 个人观点，仅供参考 硬编码在 5 处；现在完全参数化。"
+        "完全参数化，不硬编码创作来源。"
         "若 name 为空则跳过本步。"
     ),
     params={"name": "创作来源名称，如 个人观点，仅供参考；空则跳过"},

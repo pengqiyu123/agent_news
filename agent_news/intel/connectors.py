@@ -1,7 +1,6 @@
 """Connectors for the information radar.
 
-The source pool is intentionally inherited from the old project. Those sources
-were already used in production, so agent-news keeps them and routes by
+The source pool is maintained in this project. Connectors route by
 ``source.config["driver"]`` where needed.
 """
 

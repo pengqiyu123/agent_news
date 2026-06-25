@@ -34,7 +34,7 @@ HOST = os.getenv("AGENT_NEWS_HOST", "127.0.0.1")
 PORT = int(os.getenv("AGENT_NEWS_PORT", "8000"))
 
 # ── Browser automation ──────────────────────────────────────────────────────
-# Browser channel: "msedge" (default, matches the old project) or "chrome".
+# Browser channel: "msedge" (default) or "chrome".
 # Empty = Playwright's bundled Chromium.
 BROWSER_CHANNEL = os.getenv("AGENT_NEWS_BROWSER_CHANNEL", "msedge")
 # Browser executable path override. Empty = use channel default.

@@ -84,8 +84,7 @@ class OperationRegistry:
         """Execute steps in sequence with the requested on_error policy.
 
         Each step gets its own result regardless of policy — a failure never
-        erases prior successes. This is the direct fix for the old project's
-        "one step fails, whole pipeline dies".
+        erases prior successes.
         """
         ctx = OperationContext(workflow_session_id=req.workflow_session_id)
         results: list[BatchStepResult] = []

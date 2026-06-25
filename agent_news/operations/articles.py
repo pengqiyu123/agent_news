@@ -6,10 +6,40 @@ uniform Operation Registry surface instead of mixing REST calls and operations.
 
 from __future__ import annotations
 
+from ..content.article_quality import review_article_quality
 from ..content.wechat_payload import prepare_wechat_payload as build_wechat_payload
 from ..db import get_repository
+from ..db.intel_repository import get_intel_repository
 from ..models.operation import OperationResult
 from .base import operation
+
+
+def _parse_material_ids(material_id: str | None) -> list[str]:
+    raw = str(material_id or "").strip()
+    if not raw:
+        return []
+    normalized = raw.replace("，", ",").replace(";", ",").replace("；", ",")
+    return [item.strip() for item in normalized.split(",") if item.strip()]
+
+
+def _load_deep_dives_for_article(article):
+    """Resolve article.material_id when it points at one or more deep dives."""
+    material_id = (article.material_id or "").strip()
+    if not material_id:
+        return []
+    repo = get_intel_repository()
+    dives = []
+    seen = set()
+    for item in _parse_material_ids(material_id):
+        dive = repo.get_deep_dive(item)
+        if dive is None:
+            # Some agents may pass an event id as the material anchor.
+            dive = repo.get_deep_dive_by_event(item)
+        if dive is None or dive.id in seen:
+            continue
+        dives.append(dive)
+        seen.add(dive.id)
+    return dives
 
 
 @operation(
@@ -90,16 +120,54 @@ def update_article(ctx, article_id: str, fields: dict | None = None, **kwargs) -
 
 
 @operation(
-    name="article.prepare_wechat_payload",
+    name="article.review_quality",
     category="article",
-    description="只读：将文章转换成微信填写参数，不打开浏览器。",
-    params={"article_id": "文章 ID", "cover_prompt": "可选封面提示词"},
+    description="只读：按项目内置写作规范复核文章是否可进入微信填写。",
+    params={"article_id": "文章 ID"},
 )
-def prepare_wechat_payload(ctx, article_id: str, cover_prompt: str = "") -> OperationResult:
+def review_quality(ctx, article_id: str) -> OperationResult:
     article = get_repository().get_article(article_id)
     if article is None:
         return OperationResult.failure(message=f"article '{article_id}' not found")
-    payload = build_wechat_payload(article, cover_prompt=cover_prompt)
+    dives = _load_deep_dives_for_article(article)
+    report = review_article_quality(article, deep_dives=dives)
+    payload = {
+        "article_id": article.id,
+        "material_id": article.material_id,
+        "quality_report": report.as_dict(),
+        "ready_for_wechat_payload": report.passed,
+        "suggested_next_operation": report.suggested_next_operation,
+    }
+    if not report.passed:
+        return OperationResult.failure(
+            message="article quality gate failed: " + "; ".join(report.issues),
+            **payload,
+        )
+    return OperationResult.success(message=f"article quality passed for {article.id}", **payload)
+
+
+@operation(
+    name="article.prepare_wechat_payload",
+    category="article",
+    description="只读：将文章转换成微信填写参数，不打开浏览器。",
+    params={
+        "article_id": "文章 ID",
+        "cover_prompt": "可选封面提示词",
+        "override_quality_gate": "默认 false；仅人工确认例外时跳过质量门禁",
+    },
+)
+def prepare_wechat_payload(ctx, article_id: str, cover_prompt: str = "", override_quality_gate: bool = False) -> OperationResult:
+    article = get_repository().get_article(article_id)
+    if article is None:
+        return OperationResult.failure(message=f"article '{article_id}' not found")
+    dives = _load_deep_dives_for_article(article)
+    quality_report = review_article_quality(article, deep_dives=dives).as_dict()
+    payload = build_wechat_payload(
+        article,
+        cover_prompt=cover_prompt,
+        quality_report=quality_report,
+        enforce_quality_gate=not override_quality_gate,
+    )
     missing = payload.get("missing_required") or []
     if missing:
         return OperationResult.failure(
@@ -107,5 +175,13 @@ def prepare_wechat_payload(ctx, article_id: str, cover_prompt: str = "") -> Oper
             **payload,
             suggested_next_operation="article.update",
             suggested_params={"article_id": article.id, "fields": {field: "" for field in missing}},
+        )
+    if payload.get("quality_gate_enforced") and not payload.get("quality_gate_passed"):
+        issues = (quality_report or {}).get("issues") or []
+        return OperationResult.failure(
+            message="article quality gate failed: " + "; ".join(issues),
+            **payload,
+            suggested_next_operation="article.review_quality",
+            suggested_params={"article_id": article.id},
         )
     return OperationResult.success(message=f"prepared wechat payload for {article.id}", **payload)

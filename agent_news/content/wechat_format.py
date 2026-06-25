@@ -1,7 +1,6 @@
 """Markdown to WeChat-editor HTML.
 
-This is a compact port of auto-news-studio's wechat_format module with a
-slightly richer default article style. It keeps the external operation atomic:
+It keeps the external operation atomic:
 agents still call wechat.paste_body(markdown=...), while this module handles
 escaped newlines and presentation-safe HTML.
 """

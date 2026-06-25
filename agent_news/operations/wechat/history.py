@@ -1,9 +1,8 @@
 """WeChat publish-history review and metrics operations.
 
-The DOM scraping logic is ported from auto-news-studio
-backend/app/publishers/wechat/history.py. These operations are read-only:
-they navigate to 内容管理 -> 发表记录, scrape remote publish records, and
-optionally compute engagement metrics. They never click publish or edit content.
+These operations are read-only: they navigate to 内容管理 -> 发表记录, scrape
+remote publish records, and optionally compute engagement metrics. They never
+click publish or edit content.
 """
 
 from __future__ import annotations
@@ -55,7 +54,7 @@ def _find_item_by_title(items: list[dict[str, Any]], title: str) -> dict[str, An
 
 
 def _open_publish_history_on_page(page, step_logs: list[str]) -> bool:
-    """Navigate to publish history page, using the old project's fallback pattern."""
+    """Navigate to publish history page with click and href fallback."""
     page.goto(WECHAT_HOME_URL, wait_until="domcontentloaded", timeout=30000)
     page.wait_for_timeout(2000)
 

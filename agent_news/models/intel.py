@@ -1,8 +1,7 @@
 """Intel models — the information radar data layer.
 
-Mirrors the old project's proven schema (DiscoveryItem, IntelEvent, IntelAlert,
-EventDeepDive) but trimmed to what agent mode needs. Dashboard-only decoration
-fields (snapshots, freshness monitors, top-bar) are dropped — agent mode reads
+Models are trimmed to what agent mode needs. Dashboard-only decoration fields
+(snapshots, freshness monitors, top-bar) are dropped — agent mode reads
 events/alerts directly.
 
 Stages this covers:
@@ -93,7 +92,7 @@ class IntelEvent(BaseModel):
     """A clustered event (热点簇) with composite hotness scoring.
 
     This is the central object the agent reads to decide what's worth writing.
-    Scores follow the old project's weighted formula:
+    Scores follow the weighted formula:
         composite = velocity*0.28 + coverage*0.22 + freshness*0.20 + audience_fit*0.30
     """
 

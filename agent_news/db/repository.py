@@ -1,9 +1,8 @@
 """Repository — single place for all persistence logic.
 
-The key design improvement over the old project: instead of every store mixin
-method re-implementing the lock/read/mutate/write boilerplate, we expose one
-`transaction()` context manager. Callers focus on the mutation; the manager
-handles the session lifecycle.
+Instead of spreading lock/read/mutate/write boilerplate across callers, we
+expose one `transaction()` context manager. Callers focus on the mutation; the
+manager handles the session lifecycle.
 
 Mapping between Pydantic models (canonical schema) and ORM rows (storage) lives
 here too, so the rest of the codebase never touches SQLAlchemy directly.
@@ -88,7 +87,7 @@ class Repository:
     def transaction(self) -> Iterator[Session]:
         """Yield a Session and commit on success, rollback on exception.
 
-        This replaces the old project's per-method lock/read/write boilerplate.
+        This keeps write serialization in one place.
         Usage:
             with repo.transaction() as session:
                 row = session.get(ArticleRow, article_id)
@@ -255,8 +254,7 @@ class Repository:
     def transition_workflow(self, workflow_id: str, target: WorkflowState) -> WorkflowSession:
         """Validate and apply a state transition, then persist.
 
-        Raises IllegalTransitionError on invalid transitions — the single
-        chokepoint that replaces the old project's scattered string literals.
+        Raises IllegalTransitionError on invalid transitions.
         """
         wf = self.get_workflow(workflow_id)
         if wf is None:
