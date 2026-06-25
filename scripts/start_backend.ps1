@@ -148,8 +148,7 @@ if ($healthyVenvBackends.Count -gt 0) {
     ) {
         Set-Content -Path $pidFile -Value $listenerPid
         Write-Host "[INFO] agent-news is already running. PID=$listenerPid"
-        Write-Host "URL: $appUrl"
-        Start-Process $appUrl | Out-Null
+        Write-Host "URL: $appUrl (open manually if needed)"
         exit 0
     }
 }
@@ -162,8 +161,7 @@ if ($listenerPid) {
         if (Is-BackedByVenv $listenerProc $venvPython) {
             Set-Content -Path $pidFile -Value $listenerPid
             Write-Host "[INFO] agent-news is already running. PID=$listenerPid"
-            Write-Host "URL: $appUrl"
-            Start-Process $appUrl | Out-Null
+            Write-Host "URL: $appUrl (open manually if needed)"
             exit 0
         }
         Write-Host "[WARN] Detected stale agent-news backend on port 8000. PID=$listenerPid"
@@ -243,7 +241,7 @@ try {
     Write-Host "========================================"
     Write-Host ""
 
-    Start-Process $appUrl | Out-Null
+    # Do not auto-open the browser; user can open $appUrl manually if needed.
     exit 0
 } finally {
     # Always release the start-lock, whether we succeeded, failed, or were interrupted.

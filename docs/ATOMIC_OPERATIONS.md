@@ -3,6 +3,8 @@
 agent-news 的每一个能力都是一个**原子操作**——可独立调用、独立失败、独立重试。
 完整清单可通过 `GET /api/operations` 实时查询。本文件是人工维护的参考索引。
 
+当前试生产版本注册表应返回 **68 个操作**。如本文档与实时注册表冲突，以 `GET /api/operations` 为准，并立即修正文档。
+
 ## 调用方式
 
 ```bash
@@ -21,6 +23,15 @@ POST /api/operations/batch
 }
 ```
 
+CLI 推荐使用项目虚拟环境：
+
+```powershell
+.\.venv\Scripts\python.exe -m agent_news list
+.\.venv\Scripts\python.exe -m agent_news run radar.status
+```
+
+不要用系统 Python 作为生产入口，避免依赖缺失或本机代理导致本地服务误判。
+
 每个操作返回 `OperationResult`：
 - `status`: `ok` | `skipped` | `failed`
 - `message`: 人类可读说明
@@ -34,6 +45,8 @@ POST /api/operations/batch
 ## 信息雷达（radar.*）
 
 设计背景见 `docs/RADAR_DESIGN.md`，实施架构见 `docs/TECHNICAL_ARCHITECTURE.md`。当前已补齐状态观测、源健康诊断、候选源治理、事件复核推荐、深挖复核等原子能力。
+
+默认源池已在本项目内置：当前默认源共 95 个。试生产库应保留 `sources=95`，运行数据表可为空。
 
 | 操作 | 参数 | 说明 |
 |---|---|---|
@@ -50,7 +63,7 @@ POST /api/operations/batch
 | `radar.build_events` | `merge_threshold?`, `alert_threshold?`, `watchlist?`, `clear_raw?` | 聚类+打分+物化 alerts，返回 `top_events` 和下一步建议 |
 | `radar.review_events` | `limit?`, `min_score?`, `include_ignored?`, `watchlist?` | 只读：返回 Top events、推荐理由、风险和下一步建议 |
 | `radar.deep_dive_event` | `event_id`, `max_sources?`, `force?` | 抓全文、提取素材、附写作指南；返回 `source_results` 和 `writing_readiness` |
-| `radar.review_deep_dive` | `event_id?`, `deep_dive_id?` | 只读：复核深挖素材、来源成功/失败和写作准备度 |
+| `radar.review_deep_dive` | `event_id?`, `deep_dive_id?` | 只读：复核深挖素材、来源成功/失败和写作准备度，并返回 `article_writing_guide` |
 | `radar.source_health_report` | — | 只读：汇总源池健康度、低贡献源、疑似重复源 |
 | `radar.disable_stale_sources` | `dry_run?`, `min_raw_items?` | 停用长期无贡献源；默认 dry-run，只返回将要停用的源 |
 | `radar.remove_source` | `source_key` | 删除信息源 |
@@ -106,6 +119,7 @@ POST /api/operations/batch
 
 > CLI auto-ensure：`python -m agent_news run wechat.open_dashboard` 时，如果
 > 服务没启动会自动后台拉起（等 /api/health 就绪），不需要手动 start.bat。
+> 生产命令建议写成 `.\.venv\Scripts\python.exe -m agent_news ...`。
 
 ---
 
@@ -130,7 +144,7 @@ POST /api/operations/batch
 
 ## 微信发布前设置（category=publish_settings）
 
-**全部参数化、全部可跳过** —— 这是相对旧项目的核心改进。
+**全部参数化、全部可跳过** —— 这是相对固定流水线的核心改进。
 
 | 操作 | 参数 | 跳过条件 | 说明 |
 |---|---|---|---|
@@ -153,6 +167,7 @@ POST /api/operations/batch
 |---|---|---|
 | `wechat.save_as_draft` | — | 存草稿箱 |
 | `wechat.save_current_editor_as_draft` | — | 意图级动作 1：当前编辑页直接保存草稿箱 |
+| `wechat.inspect_body_word_count` | — | 只读/门禁：读取微信底部「正文字数」计数；为 0 时保存草稿和发表都会被拦截 |
 | `wechat.publish_preflight` | `require_*?` | 只读：发表前必填项校验。默认检查标题、作者、正文、封面、原创声明、合集、创作来源；赞赏默认不硬卡 |
 | `wechat.click_publish` | — | 发表 step 1：点击「发表」 |
 | `wechat.confirm_publish_modal` | — | 发表 step 2：二次确认 |
@@ -165,7 +180,9 @@ POST /api/operations/batch
 
 **⚠️ `publish_to_qrcode` / `wait_qrcode` 返回 `requires_human_scan=True` 时，发表未完成。** 必须人工扫码确认。工作流状态进入 `pending_confirmation`，只有 `check_publish_done` 确认回到首页后才转 `published`。
 
-发表动作默认从严：必须先通过 `wechat.publish_preflight`。缺标题、作者、正文、封面、原创声明、合集、创作来源任意一项时，`publish_to_qrcode` / `publish_current_editor_to_qrcode` / `publish_existing_draft_to_qrcode` 会直接返回 failed，不点击发表按钮。赞赏默认不硬卡；账号支持且用户要求开启时，显式传 `require_reward=true`。
+保存/发表动作默认从严：微信底部「正文字数」计数为 0 时，`save_as_draft` / `save_current_editor_as_draft` / `click_publish` / `publish_to_qrcode` / `publish_current_editor_to_qrcode` / `publish_existing_draft_to_qrcode` 都会直接返回 failed，不点击保存草稿或发表按钮。
+
+发表动作还必须先通过 `wechat.publish_preflight`。缺标题、作者、正文、封面、原创声明、合集、创作来源任意一项时，`publish_to_qrcode` / `publish_current_editor_to_qrcode` / `publish_existing_draft_to_qrcode` 会直接返回 failed，不点击发表按钮。赞赏默认不硬卡；账号支持且用户要求开启时，显式传 `require_reward=true`。
 
 ### 三种用户意图映射
 
@@ -206,17 +223,29 @@ POST /api/operations/batch
 
 Agent 优先用 `article.*` 原子桥接雷达和微信，不需要混用临时参数。REST CRUD 仍保留给普通 API 调用。
 
+写作前必须先读取 `radar.review_deep_dive` 或 deep-dive 详情中的 `article_writing_guide`。这份指南是本项目内置的公众号写作规约，约束标题策略、短讯合集结构、事实纪律和禁用 AI 味词。Agent 可以在内部推演多个标题候选，但最终只能把 1 个定稿标题写入 `article.title`，不能要求用户三选一。
+
 | 操作 | 参数 | 说明 |
 |---|---|---|
 | `article.create` | `title`, `digest?`, `body_markdown`, `author?`, `material_id?` | 保存 Agent 已写好的文章，不自动发布、不创建 workflow |
 | `article.get` | `article_id` | 读取文章详情 |
 | `article.list` | `page?`, `page_size?` | 文章列表 |
 | `article.update` | `article_id`, `fields` 或字段 kwargs | 修改标题、摘要、作者、正文、素材关联 |
-| `article.prepare_wechat_payload` | `article_id`, `cover_prompt?` | 只读：转成微信填写参数，不打开浏览器 |
+| `article.review_quality` | `article_id` | 只读：按项目内置写作规范复核文章是否可进入微信填写 |
+| `article.prepare_wechat_payload` | `article_id`, `cover_prompt?`, `override_quality_gate?` | 只读：转成微信填写参数，不打开浏览器 |
 
-`article.prepare_wechat_payload` 的默认封面提示词是物品/场景类描述，例如“一个与标题主题相关的物品或办公场景写实图片，不包含文字”。不要让封面提示词生成文字海报。
+`article.prepare_wechat_payload` 的默认封面提示词是具象物品/场景类描述，例如芯片、手机、笔记本电脑、办公桌、实验台、合同和计算器。不要让封面提示词生成文字海报、标题海报或带字图片。
 
-`article.prepare_wechat_payload` 会校验微信编辑必填项：标题、作者、正文。缺字段时返回 `failed`，state 中包含 `missing_required`、`ready_for_wechat_fill=false`、`suggested_next_operation="article.update"`。不要把缺作者的 payload 继续传给 `wechat.fill_editor_required`。
+`article.review_quality` 和 `article.prepare_wechat_payload` 会执行平台前质量门禁：
+
+- 单事件长文应通过 `material_id` 绑定 1 个 ready deep dive；ready 的最低标准是 2 个成功来源、5 条事实。
+- 5 条短讯合集应通过 `material_id="dive-a,dive-b,dive-c,dive-d,dive-e"` 绑定至少 5 个 ready deep dive；每条至少 1 个成功来源和 1 条事实，总体事实不少于 5 条。
+- 单事件长文默认至少 800 字；短讯合集默认 600-1000 字，并且必须用“首先/然后/接下来/再说/最后”串成 5 条平台稿。
+- 平台稿不能保留 `核心事实`、`这意味着什么`、`还不确定什么`、`来源链接`、裸 URL、`## 1.` 这类本地素材格式。
+- `article.prepare_wechat_payload` 默认会拦截质量不过的文章，返回 `failed`、`quality_report`、`ready_for_wechat_fill=false`，不返回可执行 `suggested_steps`。
+- 只有人工确认例外时，才允许传 `override_quality_gate=true` 跳过质量门禁。
+
+`article.prepare_wechat_payload` 仍会校验微信编辑必填项：标题、作者、正文。缺字段时返回 `failed`，state 中包含 `missing_required`、`ready_for_wechat_fill=false`、`suggested_next_operation="article.update"`。不要把缺作者或质量不过的 payload 继续传给 `wechat.fill_editor_required`。
 
 ### 文章 REST 端点
 

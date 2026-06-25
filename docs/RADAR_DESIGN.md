@@ -15,6 +15,12 @@
 
 仍是后续项，不要在当前任务里调用：`radar.run_small_cycle`、`radar.review_raw_items`、`radar.update_source`、`radar.enable_source/disable_source`、`radar.ignore_event/unignore_event`、`article.create_from_deep_dive`、项目内联网搜索 provider、`source_candidates/source_checks` 持久化表。
 
+试生产基线：
+
+- 默认源池：95 个源，全部内置在本项目中。
+- 生产库干净状态：`sources=95`，`raw_items/intel_events/intel_alerts/deep_dives/articles/workflows/publish_tasks` 可为 0。
+- 推荐先用 `radar.sync_one_source` 跑少量源验证，再扩大到 `radar.sync_sources`。
+
 ## 背景
 
 微信公众号发布链路已经基本形成原子操作体系：导航、编辑、设置、保存、发布到二维码、草稿箱复核、发表记录复核、指标分析都可以单独调用。信息雷达是微信发布链路的上游，负责发现值得写的事件，并提供可靠素材。
@@ -37,7 +43,7 @@
 | `radar.build_events` | 聚类、打分、生成事件与 alerts |
 | `radar.review_events` | 只读复核事件、推荐理由、风险和 deep dive 参数 |
 | `radar.deep_dive_event` | 深挖单个事件，生成事实、引文、时间线、写作指南 |
-| `radar.review_deep_dive` | 只读复核深挖素材和写作准备度 |
+| `radar.review_deep_dive` | 只读复核深挖素材、写作准备度和文章写作指南 |
 | `radar.source_health_report` | 源池健康报告 |
 | `radar.disable_stale_sources` | 默认 dry-run 的低贡献源停用动作 |
 
@@ -54,7 +60,7 @@
 | `radar.status` | 只读 | 查看源、raw、events、alerts、deep dives 数量和最近时间 | 不触发网络，不生成文章 |
 | `radar.review_sources` | 只读/可探测 | 复核源配置和健康状态，暴露具体失败源 | `probe=false` 不联网；`probe=true` 单源失败不影响其他源 |
 | `radar.review_events` | 只读 | 返回 Top events、推荐理由、风险和下一步建议 | 不生成文章，不编造推荐理由 |
-| `radar.review_deep_dive` | 只读 | 复核已深挖素材的事实、引文、时间线、来源结果和写作准备度 | 不重新抓取全文；重新抓取继续用 `radar.deep_dive_event force=true` |
+| `radar.review_deep_dive` | 只读 | 复核已深挖素材的事实、引文、时间线、来源结果、写作准备度和 `article_writing_guide` | 不重新抓取全文；重新抓取继续用 `radar.deep_dive_event force=true` |
 
 ### P1：雷达管理增强（部分已实现）
 
@@ -129,7 +135,8 @@
 ```text
 radar.status
 radar.review_sources
-radar.sync_sources
+radar.sync_one_source source_key=hn-frontpage  # 试生产首轮建议
+radar.sync_sources                             # 多源采集确认稳定后再用
 radar.build_events clear_raw=false watchlist="ai,openai,anthropic,芯片"
 radar.review_events
 radar.deep_dive_event event_id=...
@@ -346,11 +353,12 @@ radar.review_deep_dive event_id=...
     {"source_key": "openai-blog", "status": "success", "word_count": 1200, "error": null},
     {"source_key": "media-x", "status": "failed", "word_count": 0, "error": "extract_empty"}
   ],
+  "article_writing_guide": "# 公众号文章写作指南\n...",
   "risks": [
     "仅 1 个来源抓取成功",
     "缺少可引用原文"
   ],
-  "suggested_next_operation": "article.create"
+  "suggested_next_operation": "radar.deep_dive_event"
 }
 ```
 
@@ -358,6 +366,8 @@ radar.review_deep_dive event_id=...
 
 - 只读 DB，不重新抓取网页。
 - `writing_readiness` 只能由真实字段推导：成功来源数、事实数、引文数、失败数。
+- 必须返回 `article_writing_guide`，供外部 Agent 按本项目内置公众号风格生成唯一标题和平台发布稿；不能让用户从多个标题里选择。
+- 只有 `writing_readiness="ready"` 才建议 `article.create`；`partial/weak` 必须继续深挖、补源或改选题。
 - 没有 deep dive 时返回 `skipped` 或 `ok` + 建议 `radar.deep_dive_event`，不能伪造素材。
 
 ### 5. `radar.run_small_cycle`（后续项，当前未注册）
@@ -600,9 +610,13 @@ radar.review_deep_dive event_id=...
     {"url": "...", "status": "success", "word_count": 1200},
     {"url": "...", "status": "failed", "error": "extract_empty"}
   ],
-  "suggested_next_operation": "article.create"
+  "suggested_next_operation": "article.create | radar.deep_dive_event"
 }
 ```
+
+只有 `writing_readiness="ready"` 时才建议 `article.create`。`partial/weak` 代表素材仍不足，Agent 应继续补源、强制重挖或改选题。
+
+平台短讯合集的 `material_id` 可以是逗号分隔的 5 个 deep dive ID，例如 `dive-a,dive-b,dive-c,dive-d,dive-e`。不要只拿单个 deep dive 去写 5 条合集，也不要用 `override_quality_gate` 绕过素材数量门槛。
 
 ## 数据模型建议
 
@@ -716,14 +730,15 @@ source_candidates
 CLI：
 
 ```powershell
-python -m agent_news run radar.status
-python -m agent_news run radar.review_sources probe=true
-python -m agent_news run radar.sync_sources
-python -m agent_news run radar.build_events watchlist=ai,openai clear_raw=false
-python -m agent_news run radar.review_events limit=10 min_score=50
-python -m agent_news run radar.deep_dive_event event_id=evt-xxx
-python -m agent_news run radar.review_deep_dive event_id=evt-xxx
-python -m agent_news run radar.validate_source url=https://example.com/feed.xml kind=rss topic=ai
+.\.venv\Scripts\python.exe -m agent_news run radar.status
+.\.venv\Scripts\python.exe -m agent_news run radar.review_sources probe=true
+.\.venv\Scripts\python.exe -m agent_news run radar.sync_one_source source_key=hn-frontpage
+.\.venv\Scripts\python.exe -m agent_news run radar.sync_sources
+.\.venv\Scripts\python.exe -m agent_news run radar.build_events watchlist=ai,openai clear_raw=false
+.\.venv\Scripts\python.exe -m agent_news run radar.review_events limit=10 min_score=50
+.\.venv\Scripts\python.exe -m agent_news run radar.deep_dive_event event_id=evt-xxx
+.\.venv\Scripts\python.exe -m agent_news run radar.review_deep_dive event_id=evt-xxx
+.\.venv\Scripts\python.exe -m agent_news run radar.validate_source url=https://example.com/feed.xml kind=rss topic=ai
 ```
 
 HTTP：

@@ -11,11 +11,20 @@
 - `radar.sync_sources` 逐源返回 `source_results`、`partial`、`failed_source_count`
 - `radar.build_events` 返回 `top_events` 和下一步建议
 - `radar.deep_dive_event` 缓存命中和新建结果都返回复核字段
-- `article.create/get/list/update/prepare_wechat_payload`
+- `article.create/get/list/update/review_quality/prepare_wechat_payload`
 - `wechat.inspect_tabs/focus_editor_tab/close_blank_tabs/upload_cover_file`
 - `audit.review_tasks`、`workflow.status`
 
 后续项：项目内联网搜索 provider、`source_candidates/source_checks` 表、`radar.run_small_cycle`、`article.create_from_deep_dive`、更细的源 update/enable/disable/ignore 原子。
+
+试生产校准：
+
+- 注册表当前为 68 个原子操作。
+- 默认源池当前为 95 个源，全部由本项目内置配置提供。
+- CLI 生产入口必须使用项目虚拟环境：`.\.venv\Scripts\python.exe -m agent_news ...`。
+- CLI HTTP 调用显式 `trust_env=False`，避免本机代理影响 `127.0.0.1`。
+- CLI 与脚本共用 `runtime/logs/backend.start.lock` 和 `runtime/logs/backend.pid`，避免重复后端进程。
+- Windows 下 venv Python 可能派生系统 Python 作为实际监听进程，`start_backend.ps1` 已按父子进程关系识别健康后端。
 
 ## 1. 范围
 
@@ -23,7 +32,7 @@
 
 1. 信息雷达观测与选题原子：`radar.status`、`radar.review_sources`、`radar.review_events`、`radar.review_deep_dive`
 2. 信息源发现与治理原子：`radar.discover_sources`、`radar.validate_source`、`radar.propose_source`、`radar.add_validated_source`
-3. 文章桥接原子：`article.create`、`article.get`、`article.list`、`article.update`、`article.prepare_wechat_payload`
+3. 文章桥接原子：`article.create`、`article.get`、`article.list`、`article.update`、`article.review_quality`、`article.prepare_wechat_payload`
 4. 微信恢复原子：`wechat.inspect_tabs`、`wechat.focus_editor_tab`、`wechat.close_blank_tabs`、`wechat.upload_cover_file`
 5. 审计与工作流观测原子：`audit.review_tasks`、`workflow.status`
 
@@ -42,7 +51,7 @@
 ```text
 Agent / AI
   |
-  | CLI: python -m agent_news run <op> key=value
+  | CLI: .\.venv\Scripts\python.exe -m agent_news run <op> key=value
   | HTTP: POST /api/operations/{name}/execute
   v
 FastAPI 服务 agent_news.main:app
@@ -290,6 +299,8 @@ weak:
 - `failed_count > 0`：存在来源抓取失败
 - `status != ready`：素材包状态不是 ready
 
+输出必须包含 `article_writing_guide`。该字段来自 deep dive 持久化记录；历史记录为空时使用项目内 canonical guide 补齐。指南由本项目维护，要求 Agent 内部完成标题优化，最终只写入 1 个 `article.title`，不得把多个候选标题交给用户选择。
+
 ### 5.2 源健康诊断
 
 #### `radar.review_sources`
@@ -507,7 +518,7 @@ proposal 必须包含：
 
 - `source_results`
 - `writing_readiness`
-- `suggested_next_operation="article.create"`，因为深挖后必须先由 Agent 写正文并保存成 article
+- `suggested_next_operation`：只有 `writing_readiness="ready"` 才是 `article.create`；`partial/weak` 继续建议 `radar.deep_dive_event`
 
 缓存命中时也应返回这些字段，不能只返回 `deep_dive_id`。
 
@@ -533,7 +544,7 @@ proposal 必须包含：
 
 #### `article.prepare_wechat_payload`
 
-输入：`article_id`、可选 `cover_prompt`
+输入：`article_id`、可选 `cover_prompt`、可选 `override_quality_gate`
 
 输出：
 
@@ -546,6 +557,8 @@ proposal 必须包含：
   "body_markdown": "...",
   "cover_prompt": "一个和主题相关的物品类画面",
   "missing_required": [],
+  "quality_report": {"passed": true, "issues": []},
+  "quality_gate_passed": true,
   "ready_for_wechat_fill": true,
   "suggested_steps": [
     {"op": "wechat.fill_editor_required", "params": {...}},
@@ -556,11 +569,26 @@ proposal 必须包含：
 
 若标题、作者、正文任一缺失，operation 返回 `failed`，state 中包含 `missing_required`、`ready_for_wechat_fill=false`、`suggested_next_operation="article.update"`，且不返回可直接执行的微信填写步骤。
 
+#### `article.review_quality`
+
+输入：`article_id`
+
+只读复核，返回 `quality_report`。该原子把项目内置写作纪律变成平台前门禁，而不是让每个外部 Agent 凭记忆判断。
+
+默认标准：
+
+- 单事件长文通过 `material_id` 绑定 1 个 ready deep dive；ready 至少包含 2 个成功来源、5 条事实。
+- 5 条短讯合集通过逗号分隔的 `material_id` 绑定至少 5 个 ready deep dive，例如 `dive-a,dive-b,dive-c,dive-d,dive-e`；每条至少 1 个成功来源和 1 条事实。
+- 单事件长文至少 800 字；短讯合集至少 600 字，并且必须是 5 条连贯平台稿。
+- 不能保留后台素材字段、裸 URL、编号素材标题、过多 AI 味词。
+
+`article.prepare_wechat_payload` 默认复用同一质量门禁。只有人工确认例外时，调用方才可传 `override_quality_gate=true`；此参数不应作为 Agent 常规路径。
+
 封面提示词规则：
 
 - 微信 AI 封面偏物品类图片，不适合文字海报。
 - 如果传入 `cover_prompt`，直接用用户提供的。
-- 如果没传，基于标题生成“物品/场景类”提示，例如“一个 iPhone 放在办公桌上的产品摄影图”，不要生成“写着标题的封面图”。
+- 如果没传，基于标题生成具象“物品/场景类”提示，例如“金属 AI 芯片放在黑色玻璃桌面上”或“一个 iPhone 放在办公桌上的产品摄影图”，不要生成“写着标题的封面图”。
 
 不建议本轮做：
 
@@ -627,7 +655,7 @@ proposal 必须包含：
 实现建议：
 
 - 放在 `agent_news/operations/wechat/cover_upload.py`
-- 复用旧项目封面选择器和当前 `cover.py` 中打开封面菜单的逻辑
+- 复用本项目 `cover.py` 中打开封面菜单的逻辑
 - 参数 `file_path`
 - 校验文件存在、后缀、大小
 - 上传后读取 `_read_cover_preview_state(page)` 确认 `hasCover=true`
@@ -678,6 +706,12 @@ proposal 必须包含：
 - 文章桥接已有 `Repository.create_article/get/list/update`，只缺 operation 包装。
 - 微信标签页观测已有 `observe_page()` 基础，恢复原子只需暴露已有能力。
 - Operation Registry、审计、CLI auto-start 已稳定，新增原子可以自然接入。
+
+当前投产阻塞项已处理：
+
+- 生产库测试数据已清理，保留源池，运行数据表清空。
+- 启动脚本和 CLI 共享锁/PID，避免双进程。
+- CLI 禁用环境代理读取，避免本地服务健康检查假失败。
 
 ### 6.2 主要风险
 
