@@ -133,6 +133,8 @@ wechat.publish_current_editor_to_qrcode  意图级：当前编辑页直接到二
 wechat.publish_existing_draft_to_qrcode  意图级：打开已有草稿再到二维码
 wechat.review_publish_history 只读：发表记录复核（可传标题）
 wechat.analyze_publish_metrics 只读：发表记录全维度指标分析
+wechat.pin_publish_record / wechat.set_publish_record_private / wechat.close_publish_record_recommendation / wechat.copy_publish_record_link / wechat.change_publish_record_collection / wechat.change_publish_record_claim_source 发表记录更多菜单原子动作
+wechat.delete_publish_record 危险写：删除发表记录；同标题多篇时传 url 精确定位，confirmed=true 才确认删除
 ```
 
 ## 关键规则
@@ -146,7 +148,8 @@ wechat.analyze_publish_metrics 只读：发表记录全维度指标分析
 7. **写作是你（AI）的职责。** 深挖只给素材包 + 写作指南，不生成正文。你必须按 `article_writing_guide` 写成平台发布稿，再存成 article。
 8. **不要假设登录态。** `open_dashboard` 只负责打开首页；随后必须调用 `check_login` 校验登录态。
 9. **复核是只读动作。** 保存后用 `review_draft_box` 查草稿箱；人工扫码发布后用 `review_publish_history` 查发表记录。执行发表记录复核后，先问用户是否继续触发 `analyze_publish_metrics`，不要自动开始指标分析。
-10. **发表弹窗必须状态驱动。** `publish_to_qrcode` 只会在 `publish_confirm` 时点“发表”，只会在 `publish_no_notify` / `continue_publish` 时点“继续发表”。`publish_no_notify` 表示当天免费群发通知已用完，内容会展示在公众号主页但不群发通知；这是正常确认页，不是异常。遇到 `account_auth_error`、`login_required`、`unknown_dialog` 会 failed 并停止，不允许猜测点击 footer 或切号按钮。
+10. **发表记录删除是危险动作。** `wechat.delete_publish_record(title=..., url=..., confirmed=false)` 默认只打开删除确认弹窗并停住；同标题多篇时必须传 `url` 精确定位。只有用户明确要求且传 `confirmed=true` 时才点击最终“确认”。确认后若进入管理员/运营者扫码验证，返回 `requires_human_scan=true`、`deleted=false`，二维码 URL 不得暴露。任何未知弹窗都必须失败停止，不许猜测点击。
+11. **发表弹窗必须状态驱动。** `publish_to_qrcode` 只会在 `publish_confirm` 时点“发表”，只会在 `publish_no_notify` / `continue_publish` 时点“继续发表”。`publish_no_notify` 表示当天免费群发通知已用完，内容会展示在公众号主页但不群发通知；这是正常确认页，不是异常。遇到 `account_auth_error`、`login_required`、`unknown_dialog` 会 failed 并停止，不允许猜测点击 footer 或切号按钮。
 
 ## 典型完整工作流（一天的活）
 
@@ -183,6 +186,13 @@ wechat.analyze_publish_metrics 只读：发表记录全维度指标分析
 18. wechat.review_publish_history title="..."                 人工扫码发布后复核发表记录
     → 返回 should_offer_metrics_analysis=true 时，先询问用户是否继续
 19. wechat.analyze_publish_metrics title="..."                用户确认后做指标分析
+20. wechat.pin_publish_record title="..." url="..."           发表记录更多菜单：置顶
+21. wechat.set_publish_record_private title="..." url="..."   发表记录更多菜单：仅自己可见
+22. wechat.close_publish_record_recommendation title="..." url="..."  发表记录更多菜单：关闭推荐
+23. wechat.copy_publish_record_link title="..." url="..."     发表记录更多菜单：复制链接
+24. wechat.change_publish_record_collection title="..." url="..."     发表记录更多菜单：修改合集
+25. wechat.change_publish_record_claim_source title="..." url="..."   发表记录更多菜单：声明创作来源
+26. wechat.delete_publish_record title="..." url="..." confirmed=false  只打开删除确认弹窗；确认删除需用户明确要求 confirmed=true
 ```
 
 ## 试生产前检查
@@ -197,7 +207,7 @@ wechat.analyze_publish_metrics 只读：发表记录全维度指标分析
 期望：
 
 - 测试通过。
-- `list` 返回 71 个操作。
+- `list` 返回 78 个操作。
 - `status.server_running=true`。
 - `radar.status` 至少返回 `source_count=95`。
 - 新生产库首次运行时，`raw_item_count/event_count/alert_count/deep_dive_count` 可以为 0。

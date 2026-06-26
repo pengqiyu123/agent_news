@@ -65,6 +65,13 @@ def test_all_wechat_operations_registered(client):
         # review
         "wechat.review_publish_history",
         "wechat.analyze_publish_metrics",
+        "wechat.pin_publish_record",
+        "wechat.set_publish_record_private",
+        "wechat.delete_publish_record",
+        "wechat.close_publish_record_recommendation",
+        "wechat.copy_publish_record_link",
+        "wechat.change_publish_record_collection",
+        "wechat.change_publish_record_claim_source",
         # publish settings
         "wechat.set_original",
         "wechat.set_original_author",
@@ -688,6 +695,428 @@ def test_publish_metrics_analysis_extracts_quality_signals():
     assert result["matched_item"]["signals"]["spread"] == 3
     assert result["matched_item"]["signals"]["monetization"] == 6.66
     assert result["matched_item"]["quality_score"] > 100
+
+
+def _patch_delete_publish_record_nav(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    class _PublishHistoryPage:
+        url = "https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list"
+
+        def wait_for_timeout(self, timeout):  # noqa: ARG002
+            return None
+
+    monkeypatch.setattr(history, "_open_publish_history_on_page", lambda page, logs: logs.append("nav ok") or True)
+    monkeypatch.setattr(
+        history.BROWSER_MANAGER,
+        "with_session",
+        lambda channel=None, *, action_fn, **kwargs: action_fn(None, _PublishHistoryPage()),  # noqa: ARG005
+    )
+
+
+def test_delete_publish_record_default_opens_dialog_but_does_not_confirm(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    confirm_clicks = []
+    monkeypatch.setattr(
+        history,
+        "_open_delete_publish_record_dialog",
+        lambda page, title, target_url="": {
+            "ok": True,
+            "matched_title": title,
+            "target_url": target_url,
+            "action": "delete_option_clicked",
+        },
+    )
+    monkeypatch.setattr(
+        history,
+        "_inspect_delete_publish_record_dialog",
+        lambda page: {
+            "dialog_type": "delete_confirm",
+            "dialog_text": "删除后用户将无法访问此页面，确定删除？",
+            "buttons": [{"text": "确认", "visible": True, "disabled": False}],
+        },
+    )
+    monkeypatch.setattr(history, "_click_delete_confirm_button", lambda page: confirm_clicks.append(True))
+
+    result = history.delete_publish_record(None, title="目标文章", confirmed=False)
+
+    assert result.status == "skipped"
+    assert result.state["requires_confirmation"] is True
+    assert result.state["deleted"] is False
+    assert result.state["matched_title"] == "目标文章"
+    assert confirm_clicks == []
+
+
+def test_delete_publish_record_confirmed_clicks_exact_confirm(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    confirm_clicks = []
+    inspect_calls = {"count": 0}
+    monkeypatch.setattr(
+        history,
+        "_open_delete_publish_record_dialog",
+        lambda page, title, target_url="": {
+            "ok": True,
+            "matched_title": title,
+            "target_url": target_url,
+            "action": "delete_option_clicked",
+        },
+    )
+    def fake_inspect_delete_dialog(page):  # noqa: ARG001
+        inspect_calls["count"] += 1
+        if inspect_calls["count"] == 1:
+            return {
+                "dialog_type": "delete_confirm",
+                "dialog_text": "删除后用户将无法访问此页面，确定删除？",
+                "buttons": [{"text": "确认", "visible": True, "disabled": False}],
+            }
+        return {
+            "dialog_type": "none",
+            "dialog_text": "",
+            "buttons": [],
+        }
+
+    monkeypatch.setattr(history, "_inspect_delete_publish_record_dialog", fake_inspect_delete_dialog)
+    monkeypatch.setattr(
+        history,
+        "_click_publish_record_menu_option",
+        lambda page, title, option_text, target_url="": {  # noqa: ARG005
+            "ok": False,
+            "reason": "target_not_found",
+        },
+    )
+    monkeypatch.setattr(
+        history,
+        "_click_delete_confirm_button",
+        lambda page: confirm_clicks.append("确认") or {"clicked": True, "text": "确认"},
+    )
+
+    result = history.delete_publish_record(None, title="目标文章", confirmed=True)
+
+    assert result.status == "ok"
+    assert result.state["deleted"] is True
+    assert result.state["button"]["text"] == "确认"
+    assert confirm_clicks == ["确认"]
+
+
+def test_delete_publish_record_confirmed_fails_when_record_still_locatable(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    inspect_calls = {"count": 0}
+    open_calls = {"count": 0}
+
+    def fake_open_delete_dialog(page, title, target_url=""):  # noqa: ARG001
+        open_calls["count"] += 1
+        return {
+            "ok": True,
+            "matched_title": title,
+            "target_url": target_url,
+            "action": "delete_option_clicked",
+        }
+
+    def fake_inspect_delete_dialog(page):  # noqa: ARG001
+        inspect_calls["count"] += 1
+        if inspect_calls["count"] == 1:
+            return {
+                "dialog_type": "delete_confirm",
+                "dialog_text": "删除后用户将无法访问此页面，确定删除？",
+                "buttons": [{"text": "确认", "visible": True, "disabled": False}],
+            }
+        return {
+            "dialog_type": "none",
+            "dialog_text": "",
+            "buttons": [],
+        }
+
+    monkeypatch.setattr(history, "_open_delete_publish_record_dialog", fake_open_delete_dialog)
+    monkeypatch.setattr(
+        history,
+        "_click_publish_record_menu_option",
+        lambda page, title, option_text, target_url="": {
+            "ok": True,
+            "matched_title": title,
+            "target_url": target_url,
+            "action": "menu_option_clicked",
+        },
+    )
+    monkeypatch.setattr(history, "_inspect_delete_publish_record_dialog", fake_inspect_delete_dialog)
+    monkeypatch.setattr(
+        history,
+        "_click_delete_confirm_button",
+        lambda page: {"clicked": True, "text": "确认"},
+    )
+
+    result = history.delete_publish_record(None, title="目标文章", confirmed=True)
+
+    assert result.status == "failed"
+    assert result.state["deleted"] is False
+    assert result.state["post_locate_result"]["ok"] is True
+
+
+def test_delete_publish_record_confirmed_reports_scan_verification(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    inspect_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        history,
+        "_open_delete_publish_record_dialog",
+        lambda page, title, target_url="": {
+            "ok": True,
+            "matched_title": title,
+            "target_url": target_url,
+            "action": "delete_option_clicked",
+        },
+    )
+
+    def fake_inspect_delete_dialog(page):  # noqa: ARG001
+        inspect_calls["count"] += 1
+        if inspect_calls["count"] == 1:
+            return {
+                "dialog_type": "delete_confirm",
+                "dialog_text": "删除后用户将无法访问此页面，确定删除？",
+                "buttons": [{"text": "确认", "visible": True, "disabled": False}],
+            }
+        return {"dialog_type": "unknown_dialog", "dialog_text": "扫码验证"}
+
+    monkeypatch.setattr(history, "_inspect_delete_publish_record_dialog", fake_inspect_delete_dialog)
+    monkeypatch.setattr(
+        history,
+        "_inspect_delete_verification_dialog",
+        lambda page: {
+            "dialog_type": "scan_verification",
+            "dialog_text": "扫码验证 管理员微信号与运营者微信号可直接扫码验证",
+            "has_qrcode": True,
+            "qrcode_src_redacted": "[redacted-qrcode]",
+            "requires_human_scan": True,
+        },
+    )
+    monkeypatch.setattr(history, "_click_delete_confirm_button", lambda page: {"clicked": True, "text": "确认"})
+
+    result = history.delete_publish_record(None, title="目标文章", confirmed=True)
+
+    assert result.status == "skipped"
+    assert result.state["requires_human_scan"] is True
+    assert result.state["verification_dialog"]["has_qrcode"] is True
+    assert result.state["verification_dialog"]["qrcode_src_redacted"] == "[redacted-qrcode]"
+    assert result.state["deleted"] is False
+
+
+def test_delete_publish_record_unknown_dialog_fails_without_confirm(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    confirm_clicks = []
+    monkeypatch.setattr(
+        history,
+        "_open_delete_publish_record_dialog",
+        lambda page, title, target_url="": {
+            "ok": True,
+            "matched_title": title,
+            "target_url": target_url,
+            "action": "delete_option_clicked",
+        },
+    )
+    monkeypatch.setattr(
+        history,
+        "_inspect_delete_publish_record_dialog",
+        lambda page: {
+            "dialog_type": "unknown_dialog",
+            "dialog_text": "未知弹窗",
+            "buttons": [{"text": "确认", "visible": True, "disabled": False}],
+        },
+    )
+    monkeypatch.setattr(history, "_click_delete_confirm_button", lambda page: confirm_clicks.append(True))
+
+    result = history.delete_publish_record(None, title="目标文章", confirmed=True)
+
+    assert result.status == "failed"
+    assert result.state["deleted"] is False
+    assert result.state["delete_dialog"]["dialog_type"] == "unknown_dialog"
+    assert confirm_clicks == []
+
+
+def test_delete_publish_record_empty_title_fails():
+    from agent_news.operations.wechat import history
+
+    result = history.delete_publish_record(None, title="")
+
+    assert result.status == "failed"
+    assert "title" in result.message
+
+
+def test_delete_publish_record_passes_target_url_to_locator(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    observed = {}
+
+    def fake_open_delete_dialog(page, title, target_url=""):  # noqa: ARG001
+        observed["target_url"] = target_url
+        return {
+            "ok": True,
+            "matched_title": title,
+            "href": target_url,
+            "action": "delete_option_clicked",
+        }
+
+    monkeypatch.setattr(history, "_open_delete_publish_record_dialog", fake_open_delete_dialog)
+    monkeypatch.setattr(
+        history,
+        "_inspect_delete_publish_record_dialog",
+        lambda page: {
+            "dialog_type": "delete_confirm",
+            "dialog_text": "删除后用户将无法访问此页面，确定删除？",
+            "buttons": [{"text": "确认", "visible": True, "disabled": False}],
+        },
+    )
+
+    result = history.delete_publish_record(
+        None,
+        title="目标文章",
+        url="https://mp.weixin.qq.com/s/pCKCucyFSo1nif3p2KPnoQ",
+    )
+
+    assert result.status == "skipped"
+    assert observed["target_url"] == "https://mp.weixin.qq.com/s/pCKCucyFSo1nif3p2KPnoQ"
+
+
+@pytest.mark.parametrize(
+    ("func_name", "option_text"),
+    [
+        ("pin_publish_record", "置顶"),
+        ("set_publish_record_private", "仅自己可见"),
+        ("close_publish_record_recommendation", "关闭推荐"),
+        ("copy_publish_record_link", "复制链接"),
+        ("change_publish_record_collection", "修改合集"),
+        ("change_publish_record_claim_source", "声明创作来源"),
+    ],
+)
+def test_publish_record_menu_actions_click_exact_option(monkeypatch, func_name, option_text):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    observed = {}
+
+    def fake_click_menu(page, title, clicked_option, target_url=""):  # noqa: ARG001
+        observed["title"] = title
+        observed["option_text"] = clicked_option
+        observed["target_url"] = target_url
+        return {
+            "ok": True,
+            "matched_title": title,
+            "href": target_url,
+            "action": "menu_option_clicked",
+            "option_text": clicked_option,
+        }
+
+    monkeypatch.setattr(history, "_click_publish_record_menu_option", fake_click_menu)
+    monkeypatch.setattr(
+        history,
+        "_inspect_publish_record_action_dialog",
+        lambda page: {"dialog_type": "none", "dialog_found": False, "buttons": [], "requires_confirmation": False},
+    )
+
+    result = getattr(history, func_name)(
+        None,
+        title="目标文章",
+        url="https://mp.weixin.qq.com/s/pCKCucyFSo1nif3p2KPnoQ",
+    )
+
+    assert result.status == "ok"
+    assert observed == {
+        "title": "目标文章",
+        "option_text": option_text,
+        "target_url": "https://mp.weixin.qq.com/s/pCKCucyFSo1nif3p2KPnoQ",
+    }
+    assert result.state["option_text"] == option_text
+
+
+def test_publish_record_menu_action_requires_confirm_by_default(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    confirm_clicks = []
+    monkeypatch.setattr(
+        history,
+        "_click_publish_record_menu_option",
+        lambda page, title, option_text, target_url="": {
+            "ok": True,
+            "matched_title": title,
+            "href": target_url,
+            "action": "menu_option_clicked",
+            "option_text": option_text,
+        },
+    )
+    monkeypatch.setattr(
+        history,
+        "_inspect_publish_record_action_dialog",
+        lambda page: {
+            "dialog_type": "confirm",
+            "dialog_found": True,
+            "dialog_text": "确定将此内容设为仅自己可见？",
+            "buttons": [{"text": "确定", "visible": True, "disabled": False}],
+            "requires_confirmation": True,
+        },
+    )
+    monkeypatch.setattr(
+        history,
+        "_click_publish_record_action_confirm_button",
+        lambda page: confirm_clicks.append("确定") or {"clicked": True, "text": "确定"},
+    )
+
+    result = history.set_publish_record_private(None, title="目标文章")
+
+    assert result.status == "skipped"
+    assert result.state["requires_confirmation"] is True
+    assert result.state["changed"] is False
+    assert confirm_clicks == []
+
+
+def test_publish_record_menu_action_confirmed_clicks_confirm(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    _patch_delete_publish_record_nav(monkeypatch)
+    confirm_clicks = []
+    monkeypatch.setattr(
+        history,
+        "_click_publish_record_menu_option",
+        lambda page, title, option_text, target_url="": {
+            "ok": True,
+            "matched_title": title,
+            "href": target_url,
+            "action": "menu_option_clicked",
+            "option_text": option_text,
+        },
+    )
+    monkeypatch.setattr(
+        history,
+        "_inspect_publish_record_action_dialog",
+        lambda page: {
+            "dialog_type": "confirm",
+            "dialog_found": True,
+            "dialog_text": "确定关闭推荐？",
+            "buttons": [{"text": "确定", "visible": True, "disabled": False}],
+            "requires_confirmation": True,
+        },
+    )
+    monkeypatch.setattr(
+        history,
+        "_click_publish_record_action_confirm_button",
+        lambda page: confirm_clicks.append("确定") or {"clicked": True, "text": "确定"},
+    )
+
+    result = history.close_publish_record_recommendation(None, title="目标文章", confirmed=True)
+
+    assert result.status == "ok"
+    assert result.state["changed"] is True
+    assert result.state["button"]["text"] == "确定"
+    assert confirm_clicks == ["确定"]
 
 
 # ── Graceful failure without browser ────────────────────────────────────────

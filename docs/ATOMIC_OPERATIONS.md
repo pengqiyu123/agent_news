@@ -3,7 +3,7 @@
 agent-news 的每一个能力都是一个**原子操作**——可独立调用、独立失败、独立重试。
 完整清单可通过 `GET /api/operations` 实时查询。本文件是人工维护的参考索引。
 
-当前试生产版本注册表应返回 **71 个操作**。如本文档与实时注册表冲突，以 `GET /api/operations` 为准，并立即修正文档。
+当前试生产版本注册表应返回 **78 个操作**。如本文档与实时注册表冲突，以 `GET /api/operations` 为准，并立即修正文档。
 
 ## 调用方式
 
@@ -204,12 +204,23 @@ CLI 推荐使用项目虚拟环境：
 | `wechat.review_draft_box` | `title?`, `limit?` | 草稿箱复核。保存草稿后可传标题确认目标草稿存在 |
 | `wechat.review_publish_history` | `title?`, `limit?`, `max_pages?` | 发表记录复核。传标题时校验目标文章是否出现在远端发表记录 |
 | `wechat.analyze_publish_metrics` | `title?`, `limit?`, `max_pages?` | 基于发表记录提取全维度数据指标：阅读、点赞、分享、推荐、留言、划线、赞赏、转载 |
+| `wechat.pin_publish_record` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：置顶 |
+| `wechat.set_publish_record_private` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：仅自己可见 |
+| `wechat.delete_publish_record` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 危险写操作：按标题定位发表记录，同标题多篇时可传 URL 精确定位；默认只打开删除确认弹窗，只有 `confirmed=true` 才点击最终“确认” |
+| `wechat.close_publish_record_recommendation` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：关闭推荐 |
+| `wechat.copy_publish_record_link` | `title`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：复制链接；状态返回 `copied_url` |
+| `wechat.change_publish_record_collection` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：修改合集，打开后返回弹层状态 |
+| `wechat.change_publish_record_claim_source` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：声明创作来源，打开后返回弹层状态 |
 
 使用规则：
 
 - `review_draft_box` 只确认草稿箱远端状态，不打开编辑器、不修改内容。
 - `review_publish_history` 只确认发表记录远端状态；返回 `should_offer_metrics_analysis=true` 时，Agent 应主动询问用户是否继续触发 `wechat.analyze_publish_metrics`。
 - `analyze_publish_metrics` 是数据闭环动作，用于量化稿件质量、受众喜爱程度和传播性。它不等于发布确认，也不会修改文章。
+- 发表记录更多菜单 7 个动作已拆成独立原子操作：置顶、仅自己可见、删除、关闭推荐、复制链接、修改合集、声明创作来源。它们都通过标题定位目标记录；同标题多篇时必须补 `url`/`target_url` 精确定位。
+- `delete_publish_record` 是危险写动作：默认只打开删除确认弹窗，不会自动点最终“确认”。只有用户明确要求并传 `confirmed=true` 才执行真实删除；未知弹窗、目标不唯一、按钮不精确都必须失败停止。
+- `delete_publish_record` 点击“确定”后可能进入管理员/运营者扫码验证；此时返回 `status=skipped`、`requires_human_scan=true`、`deleted=false`。二维码 URL 含安全票据，返回值只暴露 `has_qrcode=true`，不暴露二维码 `src`。
+- `pin_publish_record`、`set_publish_record_private`、`close_publish_record_recommendation` 如果出现确认弹窗，默认返回 `skipped` 并停住；只有传 `confirmed=true` 才点击精确文本为“确定/确认”的按钮。
 
 指标含义：
 

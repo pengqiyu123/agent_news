@@ -56,6 +56,46 @@ def _truncate_text(value: str, limit: int = _PUBLISH_DIALOG_TEXT_LIMIT) -> str:
     return text[:limit]
 
 
+def _publish_dialog_root_js() -> str:
+    return """
+                const dialogSelectors = [
+                    ".weui-desktop-dialog",
+                    ".weui-dialog",
+                    "[role='dialog']",
+                    ".safe_check",
+                    ".dialog",
+                    ".weui-desktop-dialog__wrp",
+                    ".weui-desktop-popover__wrp",
+                ];
+                const seen = new Set();
+                const candidates = [];
+                const hasClass = (node, className) => Boolean(node?.classList?.contains?.(className));
+                for (const selector of dialogSelectors) {
+                    for (const node of document.querySelectorAll(selector)) {
+                        if (seen.has(node) || !visible(node)) continue;
+                        seen.add(node);
+                        const rect = node.getBoundingClientRect();
+                        let priority = 0;
+                        if (hasClass(node, "weui-desktop-dialog")) priority = 60;
+                        else if (hasClass(node, "weui-dialog")) priority = 50;
+                        else if (node.getAttribute("role") === "dialog") priority = 40;
+                        else if (hasClass(node, "safe_check")) priority = 30;
+                        else if (hasClass(node, "dialog")) priority = 20;
+                        else if (hasClass(node, "weui-desktop-dialog__wrp")) priority = 10;
+                        else if (hasClass(node, "weui-desktop-popover__wrp")) priority = 1;
+                        candidates.push({
+                            node,
+                            priority,
+                            area: rect.width * rect.height,
+                            textLength: normalize(node.innerText || node.textContent || "").length,
+                        });
+                    }
+                }
+                candidates.sort((a, b) => b.priority - a.priority || b.area - a.area || b.textLength - a.textLength);
+                const dialog = candidates.length ? candidates[0].node : null;
+    """
+
+
 def _operation_result(
     status: str,
     message: str,
@@ -126,11 +166,7 @@ def _inspect_publish_dialog_state(page) -> dict:
                         && rect.width > 0
                         && rect.height > 0;
                 };
-                const dialogs = Array.from(document.querySelectorAll(
-                    ".weui-desktop-dialog__wrp, .weui-dialog, [role='dialog'], " +
-                    ".weui-desktop-popover__wrp, .safe_check, .dialog"
-                )).filter(visible);
-                const dialog = dialogs.length ? dialogs[dialogs.length - 1] : null;
+                """ + _publish_dialog_root_js() + """
                 const noNotifyPanel = document.querySelector(".publish_no_notify");
                 const root = dialog || document.body;
                 const buttonNodes = dialog
@@ -283,11 +319,7 @@ def _click_visible_dialog_button_exact(page, expected_text: str) -> dict:
                     && rect.width > 0
                     && rect.height > 0;
             };
-            const dialogs = Array.from(document.querySelectorAll(
-                ".weui-desktop-dialog__wrp, .weui-dialog, [role='dialog'], " +
-                ".weui-desktop-popover__wrp, .safe_check, .dialog"
-            )).filter(visible);
-            const dialog = dialogs.length ? dialogs[dialogs.length - 1] : null;
+            """ + _publish_dialog_root_js() + """
             if (!dialog) return {clicked: false, reason: "no dialog"};
             const buttons = Array.from(dialog.querySelectorAll(
                 "button, [role='button'], a.weui-desktop-btn, " +
