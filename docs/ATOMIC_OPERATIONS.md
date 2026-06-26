@@ -3,7 +3,7 @@
 agent-news 的每一个能力都是一个**原子操作**——可独立调用、独立失败、独立重试。
 完整清单可通过 `GET /api/operations` 实时查询。本文件是人工维护的参考索引。
 
-当前试生产版本注册表应返回 **68 个操作**。如本文档与实时注册表冲突，以 `GET /api/operations` 为准，并立即修正文档。
+当前试生产版本注册表应返回 **71 个操作**。如本文档与实时注册表冲突，以 `GET /api/operations` 为准，并立即修正文档。
 
 ## 调用方式
 
@@ -149,6 +149,7 @@ CLI 推荐使用项目虚拟环境：
 | 操作 | 参数 | 跳过条件 | 说明 |
 |---|---|---|---|
 | `wechat.set_original` | `enabled` (默认 True) | `enabled=False` | 原创声明 |
+| `wechat.set_original_author` | `author` | author 为空或原创弹窗计数器超限 | 修改原创声明里的作者；用于已开启原创后需要通过原创弹窗改作者的场景；以输入框右侧计数器为准，不本地估算 |
 | `wechat.set_reward` | `enabled` (默认 True) | `enabled=False` | 赞赏 |
 | `wechat.set_collection` | `name` | `name=""` | 合集（**任意名称**，不写死） |
 | `wechat.set_claim_source` | `name` | `name=""` | 创作来源（**任意名称**） |
@@ -157,7 +158,7 @@ CLI 推荐使用项目虚拟环境：
 | `wechat.list_collections` | — | — | 只读：列出可选合集 |
 | `wechat.list_claim_sources` | — | — | 只读：列出可选创作来源 |
 
-**推荐流程**：先 `list_collections` 看有哪些合集 → 再 `set_collection(name=选中的)`。创作来源同理。`set_collection` / `set_claim_source` 必须回读命中目标文本才算成功，单纯点击不算。
+**推荐流程**：先 `list_collections` 看有哪些合集 → 再 `set_collection(name=选中的)`。创作来源同理。`set_collection` / `set_claim_source` 必须回读命中目标文本才算成功，单纯点击不算。作者如果已经被原创声明锁定，需要调用 `set_original_author(author=...)` 进入原创弹窗修改；该字段以输入框右侧计数器为准，动作不会静默截断。
 
 ---
 
@@ -170,8 +171,10 @@ CLI 推荐使用项目虚拟环境：
 | `wechat.inspect_body_word_count` | — | 只读/门禁：读取微信底部「正文字数」计数；为 0 时保存草稿和发表都会被拦截 |
 | `wechat.publish_preflight` | `require_*?` | 只读：发表前必填项校验。默认检查标题、作者、正文、封面、原创声明、合集、创作来源；赞赏默认不硬卡 |
 | `wechat.click_publish` | — | 发表 step 1：点击「发表」 |
-| `wechat.confirm_publish_modal` | — | 发表 step 2：二次确认 |
-| `wechat.continue_publish` | `max_clicks?` | 发表 step 3：循环点击「继续发表」 |
+| `wechat.inspect_publish_dialog` | — | 只读：识别发表确认、未开启群发通知确认、继续发表、二维码、账号授权错误、登录态或未知弹窗 |
+| `wechat.confirm_publish_modal` | — | 发表 step 2：仅当弹窗状态为 `publish_confirm` 时，点击文本精确为「发表」的按钮 |
+| `wechat.confirm_publish_no_notify` | — | 发表 step 3A：仅当弹窗状态为 `publish_no_notify` 时，点击文本精确为「继续发表」的按钮 |
+| `wechat.continue_publish` | `max_clicks?` | 发表 step 3：仅当弹窗状态为 `continue_publish` 或 `publish_no_notify` 时，循环点击文本精确为「继续发表」的按钮 |
 | `wechat.wait_qrcode` | `max_checks?`, `retry_wait_ms?` | 发表 step 4：轮询二维码，出现即截图 |
 | `wechat.publish_to_qrcode` | `max_continue_clicks?` | 完整发表流程（1+2+3+4），到二维码停止 |
 | `wechat.publish_current_editor_to_qrcode` | `max_continue_clicks?` | 意图级动作 2：当前编辑页直接走到二维码 |
@@ -183,6 +186,8 @@ CLI 推荐使用项目虚拟环境：
 保存/发表动作默认从严：微信底部「正文字数」计数为 0 时，`save_as_draft` / `save_current_editor_as_draft` / `click_publish` / `publish_to_qrcode` / `publish_current_editor_to_qrcode` / `publish_existing_draft_to_qrcode` 都会直接返回 failed，不点击保存草稿或发表按钮。
 
 发表动作还必须先通过 `wechat.publish_preflight`。缺标题、作者、正文、封面、原创声明、合集、创作来源任意一项时，`publish_to_qrcode` / `publish_current_editor_to_qrcode` / `publish_existing_draft_to_qrcode` 会直接返回 failed，不点击发表按钮。赞赏默认不硬卡；账号支持且用户要求开启时，显式传 `require_reward=true`。
+
+发表确认链路是 fail-closed：`publish_to_qrcode` 会先观察 `wechat.inspect_publish_dialog` 的分类结果，再决定下一步。只有 `publish_confirm` 才点「发表」，只有 `publish_no_notify` / `continue_publish` 才点「继续发表」，只有 `qrcode` 才返回 `reached_qrcode=true`。`publish_no_notify` 表示当天免费群发通知已用完，内容会展示在公众号主页但不群发通知，这是正常确认页。如果出现 `account_auth_error`（例如「未授权使用切换账号能力，请退出后扫码登录其他账号」）、`login_required` 或 `unknown_dialog`，动作会直接 failed，并在 `state.publish_dialog` 里保留弹窗文本、按钮列表和 `requires_relogin` 等字段，绝不猜测点击 footer 第一个按钮。
 
 ### 三种用户意图映射
 

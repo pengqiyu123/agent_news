@@ -13,6 +13,8 @@ Each returns its own OperationResult; failure of one never touches the others.
 
 from __future__ import annotations
 
+import re
+
 from ...browser import BROWSER_MANAGER, default_wechat_channel, get_selectors
 from ...browser.dom import (
     click_first_visible,
@@ -482,6 +484,276 @@ def _read_claim_source_selection(page, name: str) -> dict:
     return selected if isinstance(selected, dict) else {"ok": False, "raw": selected}
 
 
+def _read_original_author_state(page) -> dict:
+    state = page.evaluate(
+        """() => {
+            const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                if (!el) return false;
+                const style = getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || 1) > 0
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const textAfterColon = (value) => normalize(value).replace(/^·?\\s*作者\\s*[:：]\\s*/u, "");
+            const dialog = document.querySelector("#js_original_edit_box");
+            const visibleDialog = visible(dialog);
+            const summaryAuthor = textAfterColon(
+                document.querySelector("#js_original_open .js_author_explicit")?.textContent
+                    || document.querySelector(".js_author_explicit")?.textContent
+                    || ""
+            );
+            const previewAuthor = normalize(
+                document.querySelector("#js_original_open .js_ori_info .js_author")?.textContent
+                    || document.querySelector(".js_ori_info .js_author")?.textContent
+                    || ""
+            );
+            const input = Array.from((dialog || document).querySelectorAll("input.js_author, input[placeholder='请输入作者']"))
+                .find(visible) || null;
+            const errorNode = Array.from((dialog || document).querySelectorAll(".js_author_error, .frm_msg.fail"))
+                .find(visible) || null;
+            const counter = dialog?.querySelector(".frm_counter") || null;
+            const fastReprintText = normalize(
+                document.querySelector("#js_original_open .js_fast_reprint_tips_explicit")?.textContent
+                    || document.querySelector(".js_fast_reprint_tips_explicit")?.textContent
+                    || document.querySelector(".js_fast_reprint_tips")?.textContent
+                    || ""
+            );
+            return {
+                dialog_open: visibleDialog,
+                summary_author: summaryAuthor,
+                preview_author: previewAuthor,
+                input_value: normalize(input?.value || ""),
+                input_found: Boolean(input),
+                counter_text: normalize(counter?.innerText || counter?.textContent || ""),
+                error_text: normalize(errorNode?.innerText || errorNode?.textContent || ""),
+                fast_reprint_text: fastReprintText,
+            };
+        }"""
+    )
+    return state if isinstance(state, dict) else {"raw": state}
+
+
+def _open_original_author_dialog(page) -> dict:
+    opened = page.evaluate(
+        """() => {
+            const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                if (!el) return false;
+                const style = getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || 1) > 0
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const fire = (node, eventName) => {
+                const event = new MouseEvent(eventName, { bubbles: true, cancelable: true, view: window });
+                node.dispatchEvent(event);
+            };
+            if (visible(document.querySelector("#js_original_edit_box"))) {
+                return { ok: true, already_open: true, reason: "dialog_already_open" };
+            }
+            const selectors = [
+                "#js_original_open .js_edit_ori",
+                "#js_original_open .setting-group__switch",
+                "#js_original_open",
+                ".setting-group__switch.js_original_apply.js_edit_ori",
+                ".js_original_apply.js_edit_ori",
+                "#js_original",
+                ".js_original_apply_cell",
+                ".appmsg-editor__setting-group.origined__setting-group"
+            ];
+            for (const selector of selectors) {
+                const target = document.querySelector(selector);
+                if (!target || !visible(target)) continue;
+                target.scrollIntoView({ block: "center", inline: "center" });
+                for (const eventName of ["pointerdown", "mousedown", "mouseup", "click"]) {
+                    fire(target, eventName);
+                }
+                return { ok: true, selector, text: normalize(target.innerText || target.textContent).slice(0, 160) };
+            }
+            return { ok: false, reason: "original_entry_not_found" };
+        }"""
+    )
+    page.wait_for_timeout(900)
+    state = _read_original_author_state(page)
+    result = opened if isinstance(opened, dict) else {"ok": False, "raw": opened}
+    result["dialog_open"] = bool(state.get("dialog_open"))
+    result["state"] = state
+    return result
+
+
+def _write_original_author_in_dialog(page, author: str) -> dict:
+    result = page.evaluate(
+        """({ author }) => {
+            const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                if (!el) return false;
+                const style = getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || 1) > 0
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const dialog = document.querySelector("#js_original_edit_box");
+            if (!visible(dialog)) return { ok: false, reason: "dialog_not_open" };
+            const input = Array.from(dialog.querySelectorAll("input.js_author, input[placeholder='请输入作者']"))
+                .find(visible);
+            if (!input) return { ok: false, reason: "author_input_not_found" };
+            input.focus();
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+            if (setter) setter.call(input, author);
+            else input.value = author;
+            for (const eventName of ["input", "change", "keyup", "blur"]) {
+                input.dispatchEvent(new Event(eventName, { bubbles: true, cancelable: true }));
+            }
+            const counter = dialog.querySelector(".frm_counter");
+            return {
+                ok: true,
+                value: normalize(input.value),
+                counter_text: normalize(counter?.innerText || counter?.textContent || ""),
+            };
+        }""",
+        {"author": author},
+    )
+    page.wait_for_timeout(500)
+    return result if isinstance(result, dict) else {"ok": False, "raw": result}
+
+
+def _confirm_original_author_dialog(page) -> dict:
+    result = page.evaluate(
+        """() => {
+            const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                if (!el) return false;
+                const style = getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || 1) > 0
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clickNode = (node) => {
+                node.scrollIntoView({ block: "center", inline: "center" });
+                for (const eventName of ["pointerdown", "mousedown", "mouseup", "click"]) {
+                    node.dispatchEvent(new MouseEvent(eventName, { bubbles: true, cancelable: true, view: window }));
+                }
+            };
+            const dialog = document.querySelector("#js_original_edit_box");
+            const root = dialog?.closest(".weui-desktop-dialog") || dialog;
+            if (!visible(root)) return { ok: false, reason: "dialog_not_open" };
+            const agreementInput = Array.from(root.querySelectorAll("input[type='checkbox']"))
+                .find((input) => normalize(input.closest("label, div")?.innerText || "").includes("我已阅读"));
+            if (agreementInput && !agreementInput.checked) {
+                const label = agreementInput.closest("label") || agreementInput;
+                clickNode(label);
+            }
+            const buttons = Array.from(root.querySelectorAll("button, .weui-desktop-btn")).filter(visible);
+            const button = buttons.find((node) => {
+                const text = normalize(node.innerText || node.textContent);
+                const cls = String(node.className || "");
+                return ["确定", "确认"].includes(text) && cls.includes("primary");
+            }) || buttons.find((node) => ["确定", "确认"].includes(normalize(node.innerText || node.textContent)));
+            if (!button) return { ok: false, reason: "confirm_button_not_found" };
+            const buttonText = normalize(button.innerText || button.textContent);
+            clickNode(button);
+            return { ok: true, button_text: buttonText, agreement_checked: Boolean(agreementInput?.checked) };
+        }"""
+    )
+    page.wait_for_timeout(1000)
+    return result if isinstance(result, dict) else {"ok": False, "raw": result}
+
+
+def _original_author_counter_over_limit(counter_text: str) -> bool:
+    text = str(counter_text or "").strip()
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)", text)
+    if not match:
+        return False
+    return float(match.group(1)) > float(match.group(2))
+
+
+def _set_original_author_on_page(page, author: str) -> OperationResult:
+    guard = _require_editor(page)
+    if guard is not None:
+        return guard
+    requested = str(author or "").strip()
+    if not requested:
+        return OperationResult.failure(message="原创作者为空，无法修改", author=requested)
+    before = _read_original_author_state(page)
+    open_state = _open_original_author_dialog(page)
+    if not open_state.get("dialog_open"):
+        return OperationResult.failure(
+            message="未能打开原创声明编辑弹窗",
+            author=requested,
+            before=before,
+            open_state=open_state,
+        )
+    written = _write_original_author_in_dialog(page, requested)
+    if not written.get("ok"):
+        return OperationResult.failure(
+            message="原创声明作者输入失败",
+            author=requested,
+            before=before,
+            open_state=open_state,
+            write_state=written,
+        )
+    after_write = _read_original_author_state(page)
+    counter_text = str(written.get("counter_text") or after_write.get("counter_text") or "")
+    error_text = str(after_write.get("error_text") or "")
+    if not counter_text or error_text or _original_author_counter_over_limit(counter_text):
+        return OperationResult.failure(
+            message=f"原创声明作者未通过微信计数器校验：{counter_text or error_text or 'counter_missing'}",
+            author=requested,
+            before=before,
+            open_state=open_state,
+            write_state=written,
+            after_write=after_write,
+            counter_text=counter_text,
+            error_text=error_text,
+        )
+    confirmed = _confirm_original_author_dialog(page)
+    after = _read_original_author_state(page)
+    if not confirmed.get("ok"):
+        return OperationResult.failure(
+            message="原创声明作者已输入但未能确认",
+            author=requested,
+            before=before,
+            open_state=open_state,
+            write_state=written,
+            confirm_state=confirmed,
+            after=after,
+        )
+    readback = str(after.get("summary_author") or after.get("preview_author") or "").strip()
+    if requested not in readback and readback != requested:
+        return OperationResult.failure(
+            message=f"原创声明作者确认后回读未命中：expected={requested} actual={readback}",
+            author=requested,
+            before=before,
+            open_state=open_state,
+            write_state=written,
+            confirm_state=confirmed,
+            after=after,
+        )
+    return OperationResult.success(
+        message=f"原创声明作者已修改为：{readback}",
+        author=requested,
+        readback=readback,
+        counter_text=counter_text,
+        before=before,
+        after=after,
+        write_state=written,
+        confirm_state=confirmed,
+    )
+
+
 @operation(
     name="wechat.set_original",
     category="publish_settings",
@@ -513,6 +785,25 @@ def set_original(ctx, enabled: bool = True) -> OperationResult:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run, reset_on_failure=False)
     except Exception as e:
         return OperationResult.failure(message=f"set_original 失败: {type(e).__name__}: {e}")
+
+
+@operation(
+    name="wechat.set_original_author",
+    category="publish_settings",
+    description=(
+        "修改原创声明里的作者。用于已填写过作者/已开启原创后，需要在原创弹窗内改作者的场景。"
+        "以输入框右侧计数器为准，不本地估算；超过上限会失败且不会静默截断。"
+    ),
+    params={"author": "必填，原创声明作者；以输入框右侧 counter_text 为准"},
+)
+def set_original_author(ctx, author: str = "") -> OperationResult:
+    def _run(_context, page):
+        return _set_original_author_on_page(page, author)
+
+    try:
+        return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run, reset_on_failure=False)
+    except Exception as e:
+        return OperationResult.failure(message=f"set_original_author 失败: {type(e).__name__}: {e}")
 
 
 @operation(

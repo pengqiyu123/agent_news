@@ -79,6 +79,11 @@ WECHAT_MP_V1: dict[str, list[str]] = {
         "text=保存为草稿",
     ],
     "original_setting": [
+        "#js_original_open .js_edit_ori",
+        "#js_original_open .setting-group__switch",
+        "#js_original_open",
+        ".setting-group__switch.js_original_apply.js_edit_ori",
+        ".js_original_apply.js_edit_ori",
         "#js_original",
         ".js_original_apply_cell",
         ".appmsg-editor__setting-group.origined__setting-group",
@@ -174,15 +179,11 @@ WECHAT_MP_V1: dict[str, list[str]] = {
         "button.mass_send:has-text('发表')",
     ],
     "publish_modal_button": [
-        ".weui-desktop-dialog__wrp :text-is('发表')",
         ".weui-desktop-popover__wrp .weui-desktop-btn_wrp[slot='target'] button.weui-desktop-btn_primary:has-text('发表')",
         ".weui-desktop-popover__wrp button.weui-desktop-btn_primary:has-text('发表')",
         ".weui-desktop-dialog__wrp button.weui-desktop-btn_primary:has-text('发表')",
         ".weui-dialog button.weui-desktop-btn_primary:has-text('发表')",
         "[role='dialog'] button.weui-desktop-btn_primary:has-text('发表')",
-        ".weui-desktop-dialog__wrp .weui-desktop-dialog__bd a:has-text('发表')",
-        ".weui-desktop-dialog__wrp .weui-desktop-dialog__bd div:has-text('发表')",
-        ".weui-desktop-dialog__wrp [class*='send'] :has-text('发表')",
     ],
     "continue_publish_button": [
         "button.weui-desktop-btn_primary:has-text('继续发表')",

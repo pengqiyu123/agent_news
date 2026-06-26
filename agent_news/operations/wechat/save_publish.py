@@ -25,10 +25,334 @@ from ...models.operation import OperationResult
 from ..base import operation
 
 _CHANNEL = default_wechat_channel()
+_ACCOUNT_AUTH_MARKERS = (
+    "未授权使用切换账号能力",
+    "请退出后扫码登录其他账号",
+    "允许切换登录我的其他公众号",
+)
+_LOGIN_REQUIRED_MARKERS = (
+    "扫码登录",
+    "请使用微信扫一扫",
+    "登录超时",
+    "请重新登录",
+    "安全登录",
+)
+_PUBLISH_NO_NOTIFY_MARKERS = (
+    "未开启群发通知",
+    "已开启群发通知",
+    "publish_no_notify",
+)
+_PUBLISH_CONFIRM_TEXT = "发表"
+_CONTINUE_PUBLISH_TEXT = "继续发表"
+_PUBLISH_DIALOG_TEXT_LIMIT = 500
 
 
 def _selectors(key: str) -> list[str]:
     return get_selectors(key)
+
+
+def _truncate_text(value: str, limit: int = _PUBLISH_DIALOG_TEXT_LIMIT) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit]
+
+
+def _operation_result(
+    status: str,
+    message: str,
+    *,
+    state: dict | None = None,
+    step_logs: list[str] | None = None,
+    artifacts: list[str] | None = None,
+) -> OperationResult:
+    return OperationResult(
+        status=status,
+        message=message,
+        state=state or {},
+        step_logs=step_logs or [],
+        artifacts=artifacts or [],
+    )
+
+
+def _capture_publish_dialog_screenshot(page, label: str) -> str | None:
+    from datetime import datetime, timezone
+    from ...config import get_settings
+
+    settings = get_settings()
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    screenshot_path = settings.runtime_dir / f"publish_dialog_{label}_{ts}.png"
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=True)
+    except Exception:
+        return None
+    return str(screenshot_path) if screenshot_path.exists() else None
+
+
+def _inspect_publish_dialog_state(page) -> dict:
+    """Read the current publish dialog/page state without clicking anything."""
+    url = page_url(page)
+    state = {
+        "dialog_type": "none",
+        "url": url,
+        "dialog_text": "",
+        "buttons": [],
+        "matched_reason": "",
+        "requires_relogin": False,
+        "requires_human_scan": False,
+    }
+
+    qrcode_selector = pick_selector(page, _selectors("wechat_verify_qrcode"), timeout=800)
+    if qrcode_selector:
+        state.update(
+            {
+                "dialog_type": "qrcode",
+                "matched_reason": f"matched qrcode selector: {qrcode_selector}",
+                "requires_human_scan": True,
+                "qrcode_selector": qrcode_selector,
+            }
+        )
+        return state
+
+    try:
+        snapshot = page.evaluate(
+            """() => {
+                const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                const visible = (node) => {
+                    if (!node) return false;
+                    const style = window.getComputedStyle(node);
+                    const rect = node.getBoundingClientRect();
+                    return style.display !== "none"
+                        && style.visibility !== "hidden"
+                        && Number(style.opacity || 1) > 0
+                        && rect.width > 0
+                        && rect.height > 0;
+                };
+                const dialogs = Array.from(document.querySelectorAll(
+                    ".weui-desktop-dialog__wrp, .weui-dialog, [role='dialog'], " +
+                    ".weui-desktop-popover__wrp, .safe_check, .dialog"
+                )).filter(visible);
+                const dialog = dialogs.length ? dialogs[dialogs.length - 1] : null;
+                const noNotifyPanel = document.querySelector(".publish_no_notify");
+                const root = dialog || document.body;
+                const buttonNodes = dialog
+                    ? Array.from(dialog.querySelectorAll(
+                        "button, [role='button'], a.weui-desktop-btn, " +
+                        "input[type='button'], input[type='submit']"
+                    ))
+                    : [];
+                const buttons = buttonNodes.map((node, index) => {
+                    const rect = node.getBoundingClientRect();
+                    const className = typeof node.className === "string"
+                        ? node.className
+                        : String(node.getAttribute("class") || "");
+                    return {
+                        index,
+                        tag: node.tagName,
+                        text: normalize(node.innerText || node.textContent || node.value || ""),
+                        class: className.slice(0, 160),
+                        visible: visible(node),
+                        disabled: Boolean(node.disabled || node.getAttribute("aria-disabled") === "true"),
+                        primary: className.includes("primary"),
+                        rect: {
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            w: Math.round(rect.width),
+                            h: Math.round(rect.height),
+                        },
+                    };
+                });
+                return {
+                    dialog_found: Boolean(dialog),
+                    publish_no_notify_panel_visible: Boolean(noNotifyPanel && visible(noNotifyPanel)),
+                    dialog_text: normalize(root?.innerText || root?.textContent || "").slice(0, 1000),
+                    page_text: normalize(document.body?.innerText || document.body?.textContent || "").slice(0, 1000),
+                    buttons,
+                };
+            }"""
+        )
+    except Exception as exc:
+        state.update(
+            {
+                "dialog_type": "unknown_dialog",
+                "matched_reason": f"dialog inspect failed: {type(exc).__name__}: {exc}",
+            }
+        )
+        return state
+
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    dialog_text = _truncate_text(str(snapshot.get("dialog_text") or ""))
+    page_text = _truncate_text(str(snapshot.get("page_text") or ""))
+    buttons = [button for button in snapshot.get("buttons") or [] if isinstance(button, dict)]
+    visible_buttons = [
+        button for button in buttons
+        if button.get("visible") and not button.get("disabled") and str(button.get("text") or "").strip()
+    ]
+    combined_text = f"{dialog_text} {page_text}"
+    state.update(
+        {
+            "dialog_text": dialog_text,
+            "buttons": visible_buttons,
+            "dialog_found": bool(snapshot.get("dialog_found")),
+        }
+    )
+
+    if any(marker in combined_text for marker in _ACCOUNT_AUTH_MARKERS):
+        state.update(
+            {
+                "dialog_type": "account_auth_error",
+                "requires_relogin": True,
+                "matched_reason": "matched account authorization error text",
+            }
+        )
+        return state
+
+    if "loginpage" in url or any(marker in combined_text for marker in _LOGIN_REQUIRED_MARKERS):
+        state.update(
+            {
+                "dialog_type": "login_required",
+                "requires_relogin": True,
+                "matched_reason": "matched login required url/text",
+            }
+        )
+        return state
+
+    if bool(snapshot.get("publish_no_notify_panel_visible")) or any(
+        marker in combined_text for marker in _PUBLISH_NO_NOTIFY_MARKERS
+    ):
+        for button in visible_buttons:
+            if str(button.get("text") or "").strip() == _CONTINUE_PUBLISH_TEXT:
+                state.update(
+                    {
+                        "dialog_type": "publish_no_notify",
+                        "matched_reason": "visible no-notify publish panel",
+                        "matched_button": button,
+                    }
+                )
+                return state
+        state.update(
+            {
+                "dialog_type": "publish_no_notify",
+                "matched_reason": "visible no-notify publish panel without exact continue button",
+            }
+        )
+        return state
+
+    for button in visible_buttons:
+        if str(button.get("text") or "").strip() == _CONTINUE_PUBLISH_TEXT:
+            state.update(
+                {
+                    "dialog_type": "continue_publish",
+                    "matched_reason": "visible exact continue publish button",
+                    "matched_button": button,
+                }
+            )
+            return state
+
+    for button in visible_buttons:
+        if str(button.get("text") or "").strip() == _PUBLISH_CONFIRM_TEXT:
+            state.update(
+                {
+                    "dialog_type": "publish_confirm",
+                    "matched_reason": "visible exact publish confirm button",
+                    "matched_button": button,
+                }
+            )
+            return state
+
+    if state.get("dialog_found"):
+        state.update(
+            {
+                "dialog_type": "unknown_dialog",
+                "matched_reason": "visible dialog without a known publish action",
+            }
+        )
+    return state
+
+
+def _click_visible_dialog_button_exact(page, expected_text: str) -> dict:
+    result = page.evaluate(
+        """({ expectedText }) => {
+            const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (node) => {
+                if (!node) return false;
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || 1) > 0
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const dialogs = Array.from(document.querySelectorAll(
+                ".weui-desktop-dialog__wrp, .weui-dialog, [role='dialog'], " +
+                ".weui-desktop-popover__wrp, .safe_check, .dialog"
+            )).filter(visible);
+            const dialog = dialogs.length ? dialogs[dialogs.length - 1] : null;
+            if (!dialog) return {clicked: false, reason: "no dialog"};
+            const buttons = Array.from(dialog.querySelectorAll(
+                "button, [role='button'], a.weui-desktop-btn, " +
+                "input[type='button'], input[type='submit']"
+            ));
+            for (const node of buttons) {
+                const text = normalize(node.innerText || node.textContent || node.value || "");
+                const disabled = Boolean(node.disabled || node.getAttribute("aria-disabled") === "true");
+                if (text === expectedText && visible(node) && !disabled) {
+                    const className = typeof node.className === "string"
+                        ? node.className
+                        : String(node.getAttribute("class") || "");
+                    node.click();
+                    return {
+                        clicked: true,
+                        text,
+                        tag: node.tagName,
+                        class: className.slice(0, 160),
+                    };
+                }
+            }
+            return {
+                clicked: false,
+                reason: "no exact visible enabled button",
+                expected_text: expectedText,
+                visible_buttons: buttons
+                    .filter(visible)
+                    .map((node) => normalize(node.innerText || node.textContent || node.value || "")),
+            };
+        }""",
+        {"expectedText": expected_text},
+    )
+    if not isinstance(result, dict) or not result.get("clicked"):
+        raise RuntimeError(f"未找到可点击的精确按钮：{expected_text} ({result})")
+    page.wait_for_timeout(1600)
+    return result
+
+
+def _publish_failed_result(
+    message: str,
+    *,
+    dialog_state: dict | None = None,
+    step_logs: list[str] | None = None,
+    structured_logs: list[dict] | None = None,
+    screenshot: str | None = None,
+    preflight: dict | None = None,
+) -> OperationResult:
+    artifacts = [screenshot] if screenshot else []
+    state = {
+        "publish_dialog": dialog_state or {},
+        "publish_step_logs": structured_logs or [],
+        "requires_relogin": bool((dialog_state or {}).get("requires_relogin")),
+        "requires_human_scan": bool((dialog_state or {}).get("requires_human_scan")),
+    }
+    if screenshot:
+        state["screenshot"] = screenshot
+    if preflight is not None:
+        state["preflight"] = preflight
+    return _operation_result(
+        "failed",
+        message,
+        state=state,
+        step_logs=step_logs,
+        artifacts=artifacts,
+    )
 
 
 def _require_editor(page) -> OperationResult | None:
@@ -255,9 +579,6 @@ def _publish_current_editor_to_qrcode(
     require_claim_source: bool = True,
 ) -> OperationResult:
     """Run publish clicks on the current editor page until QR code appears."""
-    from datetime import datetime, timezone
-    from ...config import get_settings
-
     preflight = _publish_preflight_result(
         page,
         require_author=require_author,
@@ -270,135 +591,219 @@ def _publish_current_editor_to_qrcode(
     if preflight.status == "failed":
         return preflight
 
-    settings = get_settings()
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    screenshot_path = settings.runtime_dir / f"publish_qrcode_{ts}.png"
-    step_logs = []
+    step_logs: list[str] = []
+    structured_logs: list[dict] = []
 
     # step 1: 发表
     try:
-        click_required_selector_once(
+        selector = click_required_selector_once(
             page, _selectors("article_publish_button"),
             step_name="click_publish", timeout=6000, settle_ms=1800,
         )
-        step_logs.append("step1 已点击发表")
-    except Exception as e:
-        return OperationResult.failure(message=f"step1 点击发表失败: {e}", step_logs=step_logs)
-
-    # step 2: 二次确认
-    pre_click_url = page_url(page)
-    try:
-        selector = click_required_selector_once(
-            page, _selectors("publish_modal_button"),
-            step_name="confirm_publish_modal", timeout=6000, settle_ms=1800,
+        step_logs.append(f"step1 已点击发表 (selector={selector})")
+        structured_logs.append(
+            {"step": "click_publish", "dialog_type": None, "action": "click", "selector": selector}
         )
-        step_logs.append(f"step2 已二次确认 (selector={selector})")
-        # 检查是否真的跳转了（排除点击了 h3 标题等非确认元素的情况）
-        page.wait_for_timeout(2000)
-        post_click_url = page_url(page)
-        if post_click_url == pre_click_url:
-            # URL 没变，说明点击了错误的元素（如 h3 标题）
-            step_logs.append("step2b URL未变化，尝试JS点击确认按钮")
-            clicked = page.evaluate("""() => {
-                const dialog = document.querySelector('.weui-desktop-dialog__wrp');
-                if (!dialog) return 'no dialog';
-                const ft = dialog.querySelector('.weui-desktop-dialog__ft');
-                if (ft) {
-                    const btn = ft.querySelector('button, [role="button"], .weui-desktop-btn_primary, a');
-                    if (btn) { btn.click(); return 'clicked ft btn: ' + btn.textContent?.trim(); }
-                }
-                const candidates = dialog.querySelectorAll('.weui-desktop-btn_primary, button.weui-desktop-btn');
-                for (const c of candidates) {
-                    const rect = c.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) { c.click(); return 'clicked candidate'; }
-                }
-                return 'no confirm btn found';
-            }""")
-            step_logs.append(f"step2c JS结果: {clicked}")
-            page.wait_for_timeout(2000)
     except Exception as e:
-        step_logs.append(f"step2 二次确认未出现: {e}")
-        # 弹窗可能是发表选项面板而非确认弹窗
-        # 策略：用 JS 获取弹窗结构并尝试点击确认按钮
-        try:
-            result = page.evaluate("""() => {
-                const dialog = document.querySelector('.weui-desktop-dialog__wrp');
-                if (!dialog) return JSON.stringify({status: 'no dialog'});
-                const info = [];
-                const allEls = dialog.querySelectorAll('button, [role="button"], a, input[type="submit"], .weui-desktop-btn, .weui-desktop-dialog__ft, .weui-desktop-dialog__bd');
-                for (const el of allEls) {
-                    const rect = el.getBoundingClientRect();
-                    const visible = rect.width > 0 && rect.height > 0;
-                    info.push({
-                        tag: el.tagName,
-                        class: el.className?.substring(0, 80),
-                        text: el.textContent?.trim()?.substring(0, 50),
-                        visible: visible,
-                        rect: {x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height)}
-                    });
-                }
-                const ft = dialog.querySelector('.weui-desktop-dialog__ft');
-                if (ft) {
-                    info.push({tag: 'FT-AREA', class: ft.className, text: ft.textContent?.trim()?.substring(0, 100), html: ft.innerHTML?.substring(0, 500)});
-                }
-                return JSON.stringify({status: 'found', elements: info});
-            }""")
-            step_logs.append(f"step2b 弹窗结构: {result[:300]}")
-            # 尝试点击弹窗 footer 区域的确认按钮
-            clicked = page.evaluate("""() => {
-                const dialog = document.querySelector('.weui-desktop-dialog__wrp');
-                if (!dialog) return 'no dialog';
-                // 优先找 footer 区域的按钮
-                const ft = dialog.querySelector('.weui-desktop-dialog__ft');
-                if (ft) {
-                    const btn = ft.querySelector('button, [role="button"], .weui-desktop-btn_primary, a');
-                    if (btn) { btn.click(); return 'clicked ft btn'; }
-                }
-                // 找弹窗内任何可见的确认类按钮
-                const candidates = dialog.querySelectorAll('.weui-desktop-btn_primary, button.weui-desktop-btn, [class*="confirm"], [class*="submit"]');
-                for (const c of candidates) {
-                    const rect = c.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) { c.click(); return 'clicked candidate'; }
-                }
-                return 'no confirm btn';
-            }""")
-            step_logs.append(f"step2c 点击结果: {clicked}")
-            page.wait_for_timeout(2000)
-        except Exception as js_e:
-            step_logs.append(f"step2b/c 失败: {js_e}")
+        return _publish_failed_result(
+            f"step1 点击发表失败: {e}",
+            step_logs=step_logs,
+            structured_logs=structured_logs,
+            preflight=preflight.state,
+        )
 
-    # step 3: 继续发表循环
     continue_clicks = 0
-    for _ in range(max(0, max_continue_clicks)):
-        selector = pick_selector(page, _selectors("continue_publish_button"), timeout=3000)
-        if not selector:
-            break
-        page.locator(selector).first.click(timeout=3000)
-        continue_clicks += 1
-        page.wait_for_timeout(1200)
-    step_logs.append(f"step3 继续发表点击 {continue_clicks} 次")
+    confirm_clicks = 0
+    max_state_checks = max(18, max_continue_clicks + 12)
+    last_state: dict | None = None
 
-    # step 4: 等二维码
-    qrcode_selector = None
-    for _ in range(12):
-        qrcode_selector = pick_selector(page, _selectors("wechat_verify_qrcode"), timeout=5000)
-        if qrcode_selector:
-            break
-        page.wait_for_timeout(5000)
-    if not qrcode_selector:
-        return OperationResult.failure(
-            message="已走完发表流程但未检测到二维码", step_logs=step_logs, url=page_url(page),
+    for attempt in range(1, max_state_checks + 1):
+        dialog_state = _inspect_publish_dialog_state(page)
+        last_state = dialog_state
+        dialog_type = str(dialog_state.get("dialog_type") or "none")
+        structured_logs.append(
+            {
+                "step": "inspect_publish_dialog",
+                "attempt": attempt,
+                "dialog_type": dialog_type,
+                "action": "observe",
+                "matched_reason": dialog_state.get("matched_reason", ""),
+            }
         )
-    try:
-        page.screenshot(path=str(screenshot_path), full_page=True)
-    except Exception:
-        pass
-    shot = str(screenshot_path) if screenshot_path.exists() else None
-    step_logs.append("step4 已到达二维码")
-    return OperationResult.success(
-        message="已到达微信验证二维码，请人工扫码确认发表。",
-        reached_qrcode=True, requires_human_scan=True,
-        url=page_url(page), screenshot=shot, step_logs=step_logs,
+        step_logs.append(f"inspect#{attempt} dialog_type={dialog_type}")
+
+        if dialog_type == "qrcode":
+            screenshot = _capture_publish_dialog_screenshot(page, "qrcode")
+            step_logs.append("step4 已到达二维码")
+            state = {
+                "reached_qrcode": True,
+                "requires_human_scan": True,
+                "url": page_url(page),
+                "screenshot": screenshot,
+                "publish_dialog": dialog_state,
+                "publish_step_logs": structured_logs,
+                "continue_clicks": continue_clicks,
+                "confirm_clicks": confirm_clicks,
+                "preflight": preflight.state,
+            }
+            return _operation_result(
+                "ok",
+                "已到达微信验证二维码，请人工扫码确认发表。",
+                state=state,
+                step_logs=step_logs,
+                artifacts=[screenshot] if screenshot else [],
+            )
+
+        if dialog_type == "publish_confirm":
+            if confirm_clicks >= 2:
+                screenshot = _capture_publish_dialog_screenshot(page, "publish_confirm_stuck")
+                return _publish_failed_result(
+                    "二次确认发表后仍停留在发表确认弹窗，已停止避免重复点击。",
+                    dialog_state=dialog_state,
+                    step_logs=step_logs,
+                    structured_logs=structured_logs,
+                    screenshot=screenshot,
+                    preflight=preflight.state,
+                )
+            try:
+                click_info = _click_visible_dialog_button_exact(page, _PUBLISH_CONFIRM_TEXT)
+            except Exception as exc:
+                screenshot = _capture_publish_dialog_screenshot(page, "publish_confirm_click_failed")
+                return _publish_failed_result(
+                    f"二次确认发表按钮点击失败：{type(exc).__name__}: {exc}",
+                    dialog_state=dialog_state,
+                    step_logs=step_logs,
+                    structured_logs=structured_logs,
+                    screenshot=screenshot,
+                    preflight=preflight.state,
+                )
+            confirm_clicks += 1
+            structured_logs.append(
+                {
+                    "step": "confirm_publish_modal",
+                    "dialog_type": dialog_type,
+                    "action": "click",
+                    "button_text": _PUBLISH_CONFIRM_TEXT,
+                    "button": click_info,
+                }
+            )
+            step_logs.append(f"step2 已二次确认发表 (button_text={_PUBLISH_CONFIRM_TEXT})")
+            continue
+
+        if dialog_type == "publish_no_notify":
+            if continue_clicks >= max(0, max_continue_clicks):
+                screenshot = _capture_publish_dialog_screenshot(page, "publish_no_notify_limit")
+                return _publish_failed_result(
+                    f"未开启群发通知确认次数达到上限 {max_continue_clicks}，已停止。",
+                    dialog_state=dialog_state,
+                    step_logs=step_logs,
+                    structured_logs=structured_logs,
+                    screenshot=screenshot,
+                    preflight=preflight.state,
+                )
+            try:
+                click_info = _click_visible_dialog_button_exact(page, _CONTINUE_PUBLISH_TEXT)
+            except Exception as exc:
+                screenshot = _capture_publish_dialog_screenshot(page, "publish_no_notify_click_failed")
+                return _publish_failed_result(
+                    f"未开启群发通知确认按钮点击失败：{type(exc).__name__}: {exc}",
+                    dialog_state=dialog_state,
+                    step_logs=step_logs,
+                    structured_logs=structured_logs,
+                    screenshot=screenshot,
+                    preflight=preflight.state,
+                )
+            continue_clicks += 1
+            structured_logs.append(
+                {
+                    "step": "confirm_publish_no_notify",
+                    "dialog_type": dialog_type,
+                    "action": "click",
+                    "button_text": _CONTINUE_PUBLISH_TEXT,
+                    "button": click_info,
+                }
+            )
+            step_logs.append("step3A 已确认未开启群发通知并继续发表")
+            continue
+
+        if dialog_type == "continue_publish":
+            if continue_clicks >= max(0, max_continue_clicks):
+                screenshot = _capture_publish_dialog_screenshot(page, "continue_limit")
+                return _publish_failed_result(
+                    f"继续发表次数达到上限 {max_continue_clicks}，已停止。",
+                    dialog_state=dialog_state,
+                    step_logs=step_logs,
+                    structured_logs=structured_logs,
+                    screenshot=screenshot,
+                    preflight=preflight.state,
+                )
+            try:
+                click_info = _click_visible_dialog_button_exact(page, _CONTINUE_PUBLISH_TEXT)
+            except Exception as exc:
+                screenshot = _capture_publish_dialog_screenshot(page, "continue_click_failed")
+                return _publish_failed_result(
+                    f"继续发表按钮点击失败：{type(exc).__name__}: {exc}",
+                    dialog_state=dialog_state,
+                    step_logs=step_logs,
+                    structured_logs=structured_logs,
+                    screenshot=screenshot,
+                    preflight=preflight.state,
+                )
+            continue_clicks += 1
+            structured_logs.append(
+                {
+                    "step": "continue_publish",
+                    "dialog_type": dialog_type,
+                    "action": "click",
+                    "button_text": _CONTINUE_PUBLISH_TEXT,
+                    "button": click_info,
+                }
+            )
+            step_logs.append(f"step3 已点击继续发表 {continue_clicks} 次")
+            continue
+
+        if dialog_type == "account_auth_error":
+            screenshot = _capture_publish_dialog_screenshot(page, "account_auth_error")
+            return _publish_failed_result(
+                "微信账号授权错误：未授权使用切换账号能力。请退出后重新扫码登录，并允许切换登录其他公众号/服务号。",
+                dialog_state=dialog_state,
+                step_logs=step_logs,
+                structured_logs=structured_logs,
+                screenshot=screenshot,
+                preflight=preflight.state,
+            )
+
+        if dialog_type == "login_required":
+            screenshot = _capture_publish_dialog_screenshot(page, "login_required")
+            return _publish_failed_result(
+                "微信登录态失效或需要重新扫码登录，发表流程已停止。",
+                dialog_state=dialog_state,
+                step_logs=step_logs,
+                structured_logs=structured_logs,
+                screenshot=screenshot,
+                preflight=preflight.state,
+            )
+
+        if dialog_type == "unknown_dialog":
+            screenshot = _capture_publish_dialog_screenshot(page, "unknown_dialog")
+            return _publish_failed_result(
+                "出现未知发表弹窗，未做任何猜测点击。请先调用 wechat.inspect_publish_dialog 查看弹窗结构。",
+                dialog_state=dialog_state,
+                step_logs=step_logs,
+                structured_logs=structured_logs,
+                screenshot=screenshot,
+                preflight=preflight.state,
+            )
+
+        page.wait_for_timeout(2000)
+
+    screenshot = _capture_publish_dialog_screenshot(page, "timeout")
+    return _publish_failed_result(
+        "等待发表状态变化超时，未检测到二维码或可识别弹窗。",
+        dialog_state=last_state or {"dialog_type": "none", "url": page_url(page)},
+        step_logs=step_logs,
+        structured_logs=structured_logs,
+        screenshot=screenshot,
         preflight=preflight.state,
     )
 
@@ -520,21 +925,65 @@ def click_publish(ctx) -> OperationResult:
 
 
 @operation(
+    name="wechat.inspect_publish_dialog",
+    category="save_publish",
+    description=(
+        "只读：识别发表确认/继续发表/二维码/账号授权错误/登录态/未知弹窗。"
+        "账号授权错误会返回 failed 且 requires_relogin=True。"
+    ),
+    params={},
+)
+def inspect_publish_dialog(ctx) -> OperationResult:
+    def _run(_context, page):
+        state = _inspect_publish_dialog_state(page)
+        dialog_type = str(state.get("dialog_type") or "none")
+        if dialog_type == "account_auth_error":
+            return OperationResult.failure(
+                message="检测到微信账号授权错误，请退出后重新扫码登录并允许切换登录其他公众号/服务号。",
+                **state,
+            )
+        return OperationResult.success(
+            message=f"当前发表弹窗状态：{dialog_type}",
+            **state,
+        )
+
+    try:
+        return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run, reset_on_failure=False)
+    except Exception as e:
+        return OperationResult.failure(message=f"inspect_publish_dialog 失败: {type(e).__name__}: {e}")
+
+
+@operation(
     name="wechat.confirm_publish_modal",
     category="save_publish",
-    description="发表流程 step 2：点击弹窗里的发表二次确认（publish_modal_button）。",
+    description="发表流程 step 2：仅当弹窗状态为 publish_confirm 时，点击文本精确为“发表”的按钮。",
     params={},
 )
 def confirm_publish_modal(ctx) -> OperationResult:
     def _run(_context, page):
-        try:
-            selector = click_required_selector_once(
-                page, _selectors("publish_modal_button"),
-                step_name="confirm_publish_modal", timeout=6000, settle_ms=1800,
+        state = _inspect_publish_dialog_state(page)
+        dialog_type = str(state.get("dialog_type") or "none")
+        if dialog_type != "publish_confirm":
+            return OperationResult.failure(
+                message=f"当前不是发表确认弹窗，已停止点击（dialog_type={dialog_type}）",
+                publish_dialog=state,
+                requires_relogin=bool(state.get("requires_relogin")),
             )
-            return OperationResult.success(message="已二次确认发表", step=2, selector=selector)
+        try:
+            click_info = _click_visible_dialog_button_exact(page, _PUBLISH_CONFIRM_TEXT)
+            return OperationResult.success(
+                message="已二次确认发表",
+                step=2,
+                button_text=_PUBLISH_CONFIRM_TEXT,
+                button=click_info,
+                publish_dialog=state,
+            )
         except Exception as e:
-            return OperationResult.failure(message=f"二次确认弹窗未出现或点击失败: {e}")
+            return OperationResult.failure(
+                message=f"二次确认发表按钮点击失败: {e}",
+                publish_dialog=state,
+                requires_relogin=bool(state.get("requires_relogin")),
+            )
 
     try:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run)
@@ -543,26 +992,96 @@ def confirm_publish_modal(ctx) -> OperationResult:
 
 
 @operation(
+    name="wechat.confirm_publish_no_notify",
+    category="save_publish",
+    description=(
+        "发表流程 step 3A：仅当弹窗状态为 publish_no_notify 时，点击文本精确为“继续发表”的按钮。"
+    ),
+    params={},
+)
+def confirm_publish_no_notify(ctx) -> OperationResult:
+    def _run(_context, page):
+        state = _inspect_publish_dialog_state(page)
+        dialog_type = str(state.get("dialog_type") or "none")
+        if dialog_type != "publish_no_notify":
+            return OperationResult.failure(
+                message=f"当前不是未开启群发通知确认弹窗，已停止点击（dialog_type={dialog_type}）",
+                publish_dialog=state,
+                requires_relogin=bool(state.get("requires_relogin")),
+            )
+        try:
+            click_info = _click_visible_dialog_button_exact(page, _CONTINUE_PUBLISH_TEXT)
+            return OperationResult.success(
+                message="已确认未开启群发通知并继续发表",
+                step="3a",
+                button_text=_CONTINUE_PUBLISH_TEXT,
+                button=click_info,
+                publish_dialog=state,
+                publish_no_notify_confirmed=True,
+            )
+        except Exception as e:
+            return OperationResult.failure(
+                message=f"未开启群发通知确认按钮点击失败: {e}",
+                publish_dialog=state,
+                requires_relogin=bool(state.get("requires_relogin")),
+            )
+
+    try:
+        return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run)
+    except Exception as e:
+        return OperationResult.failure(message=f"confirm_publish_no_notify 失败: {type(e).__name__}: {e}")
+
+
+@operation(
     name="wechat.continue_publish",
     category="save_publish",
     description=(
         "发表流程 step 3：循环点击继续发表（continue_publish_button），最多 max_clicks 次。"
-        "微信会多次弹出继续发表按钮（每个合规检查一次），本操作全部吸收。"
+        "兼容 continue_publish 与 publish_no_notify 两种确认面板。"
     ),
     params={"max_clicks": "最多点击次数，默认 3"},
 )
 def continue_publish(ctx, max_clicks: int = 3) -> OperationResult:
     def _run(_context, page):
         clicks = 0
+        step_logs: list[str] = []
+        last_state: dict | None = None
         for _ in range(max(0, max_clicks)):
-            selector = pick_selector(page, _selectors("continue_publish_button"), timeout=3000)
-            if not selector:
+            state = _inspect_publish_dialog_state(page)
+            last_state = state
+            dialog_type = str(state.get("dialog_type") or "none")
+            step_logs.append(f"dialog_type={dialog_type}")
+            if dialog_type == "qrcode":
+                return _operation_result(
+                    "ok",
+                    f"已到达二维码，停止继续发表点击（此前点击 {clicks} 次）",
+                    state={
+                        "step": 3,
+                        "clicks": clicks,
+                        "reached_qrcode": True,
+                        "requires_human_scan": True,
+                        "publish_dialog": state,
+                    },
+                    step_logs=step_logs,
+                )
+            if dialog_type in {"account_auth_error", "login_required", "unknown_dialog"}:
+                return OperationResult.failure(
+                    message=f"继续发表前检测到异常弹窗，已停止（dialog_type={dialog_type}）",
+                    publish_dialog=state,
+                    requires_relogin=bool(state.get("requires_relogin")),
+                    clicks=clicks,
+                )
+            if dialog_type not in {"continue_publish", "publish_no_notify"}:
                 break
-            page.locator(selector).first.click(timeout=3000)
+            _click_visible_dialog_button_exact(page, _CONTINUE_PUBLISH_TEXT)
             clicks += 1
-            page.wait_for_timeout(1200)
         msg = "已点击继续发表 " + str(clicks) + " 次（无更多按钮）" if clicks else "未出现继续发表按钮"
-        return OperationResult.success(message=msg, step=3, clicks=clicks)
+        return _operation_result(
+            "ok",
+            msg,
+            state={"step": 3, "clicks": clicks, "publish_dialog": last_state or {}},
+            step_logs=step_logs,
+        )
 
     try:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run)
@@ -589,16 +1108,28 @@ def wait_qrcode(ctx, max_checks: int = 12, retry_wait_ms: int = 5000) -> Operati
 
     def _run(_context, page):
         qrcode_selector = None
+        last_state = None
         for _ in range(max(1, max_checks)):
-            qrcode_selector = pick_selector(page, _selectors("wechat_verify_qrcode"), timeout=5000)
-            if qrcode_selector:
+            state = _inspect_publish_dialog_state(page)
+            last_state = state
+            dialog_type = str(state.get("dialog_type") or "none")
+            if dialog_type == "qrcode":
+                qrcode_selector = state.get("qrcode_selector") or "wechat_verify_qrcode"
                 break
+            if dialog_type in {"account_auth_error", "login_required", "unknown_dialog"}:
+                return OperationResult.failure(
+                    message=f"等待二维码前检测到异常发表状态（dialog_type={dialog_type}）",
+                    reached_qrcode=False,
+                    publish_dialog=state,
+                    requires_relogin=bool(state.get("requires_relogin")),
+                    url=page_url(page),
+                )
             if retry_wait_ms > 0:
                 page.wait_for_timeout(retry_wait_ms)
         if not qrcode_selector:
             return OperationResult.failure(
                 message="检查 " + str(max_checks) + " 次后仍未检测到微信验证二维码",
-                reached_qrcode=False, url=page_url(page),
+                reached_qrcode=False, url=page_url(page), publish_dialog=last_state or {},
             )
         try:
             page.screenshot(path=str(screenshot_path), full_page=True)

@@ -19,7 +19,7 @@
 
 试生产校准：
 
-- 注册表当前为 68 个原子操作。
+- 注册表当前为 71 个原子操作。
 - 默认源池当前为 95 个源，全部由本项目内置配置提供。
 - CLI 生产入口必须使用项目虚拟环境：`.\.venv\Scripts\python.exe -m agent_news ...`。
 - CLI HTTP 调用显式 `trust_env=False`，避免本机代理影响 `127.0.0.1`。
@@ -89,6 +89,7 @@ SQLite
 - 所有原子操作返回 `OperationResult`，失败不抛业务异常。
 - 每次 operation 执行写入 `publish_tasks` 审计。
 - `publish_to_qrcode` 和 `wait_qrcode` 只能推进到 `pending_confirmation`，不能直接 `published`。
+- 微信发表确认链路 fail-closed：先用 `wechat.inspect_publish_dialog` 识别状态，只在明确的 `publish_confirm` / `publish_no_notify` / `continue_publish` 状态点击精确按钮；账号授权、登录态、未知弹窗都停止并写入审计状态。
 
 ## 3. 目标架构
 

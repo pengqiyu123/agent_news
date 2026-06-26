@@ -74,6 +74,25 @@ def test_fill_author_allows_platform_default_when_explicit(monkeypatch):
     assert result.state["platform_default"] is True
 
 
+def test_fill_author_counts_ascii_as_half_width(monkeypatch):
+    """Agent news is 5 WeChat author units, so it must not be truncated to 8 codepoints."""
+    from agent_news.operations.wechat import editor
+
+    written = {}
+    monkeypatch.setattr(
+        editor,
+        "write_plain_field",
+        lambda page, selectors, value, field_label: written.setdefault("value", value) or "input.js_author",
+    )
+    monkeypatch.setattr(editor, "read_locator_value", lambda page, selector: written["value"])
+
+    result = editor._fill_author_on_page(_FakePage({}), "Agent news")
+
+    assert result.status == "ok"
+    assert result.state["value"] == "Agent news"
+    assert written["value"] == "Agent news"
+
+
 def test_editor_single_field_operations_accept_agent_friendly_aliases(monkeypatch):
     """Single-field editor ops keep canonical text/markdown params but accept common aliases."""
     from agent_news.operations.wechat import editor

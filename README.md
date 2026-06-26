@@ -111,13 +111,13 @@ POST /api/operations/wechat.list_collections/execute
 
 当前代码已进入试生产状态：
 
-- 操作注册表：68 个原子操作
+- 操作注册表：71 个原子操作
 - 默认信息源：95 个，随本项目内置分发
 - 生产库初始状态：保留 `sources=95`，运行数据表清空
 - 写作规约：`radar.review_deep_dive` / deep-dive 详情返回项目内置的 `article_writing_guide`，Agent 必须按它生成唯一标题和平台发布稿
 - 文章质量门禁：微信 payload 前必须通过 `article.review_quality`，防止素材不足或短稿直接进草稿箱
 - 5 条短讯合集要先绑定 5 个 ready deep dive，再进入平台稿；不要用 `override_quality_gate` 当日常绕过手段
-- 微信发布边界：到二维码只代表 `pending_confirmation`，必须人工扫码，不能视为发布成功
+- 微信发布边界：到二维码只代表 `pending_confirmation`，必须人工扫码，不能视为发布成功；发表弹窗链路 fail-closed，支持识别“未开启群发通知”的无通知发表确认，账号授权/登录/未知弹窗会停止并返回可复盘状态
 - 推荐试生产路径：先跑少量源，再保存微信草稿，确认无误后再进入二维码发布链
 
 试生产第一条链路建议：

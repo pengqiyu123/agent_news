@@ -21,6 +21,7 @@ from ...content.wechat_format import (
     normalize_markdown_newlines,
     prepare_wechat_body,
 )
+from ...content.wechat_author import truncate_author_to_limit
 from ...models.operation import OperationResult
 from ..base import operation
 
@@ -48,7 +49,7 @@ def _fill_title_on_page(page, text: str) -> OperationResult:
 
 
 def _fill_author_on_page(page, text: str, *, allow_platform_default: bool = False) -> OperationResult:
-    author = text[:8]
+    author = truncate_author_to_limit(text)
     selector = write_plain_field(page, _selectors("author_input"), author, field_label="author")
     actual = read_locator_value(page, selector)
     if actual.strip() != author.strip():
@@ -228,7 +229,7 @@ def fill_title(ctx, text: str = "", title: str = "") -> OperationResult:
     name="wechat.fill_author",
     category="editor",
     description=(
-        "在编辑页填写作者署名（最多8字符）。要求当前已在编辑页。"
+        "在编辑页填写作者署名（最多8个中文字宽，英文/空格等半角字符约2个算1个字）。要求当前已在编辑页。"
         "默认严格回读校验；若允许平台保留默认作者，可传 allow_platform_default=True。"
     ),
     params={
@@ -327,7 +328,7 @@ def paste_body(
     ),
     params={
         "title": "必填，文章标题",
-        "author": "必填，作者署名，微信最多8字符",
+        "author": "必填，作者署名，微信最多8个中文字宽；英文/空格等半角字符约2个算1个字",
         "body_markdown": "必填，正文 Markdown；不要把文章标题放进正文",
         "styled": "bool，默认 True；正文转成微信富文本 HTML",
         "allow_platform_default": "bool，默认 False；True 时接受微信保留的默认作者",

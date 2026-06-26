@@ -53,7 +53,9 @@ def test_all_wechat_operations_registered(client):
         "wechat.inspect_body_word_count",
         "wechat.publish_preflight",
         "wechat.click_publish",
+        "wechat.inspect_publish_dialog",
         "wechat.confirm_publish_modal",
+        "wechat.confirm_publish_no_notify",
         "wechat.continue_publish",
         "wechat.wait_qrcode",
         "wechat.publish_to_qrcode",
@@ -65,6 +67,7 @@ def test_all_wechat_operations_registered(client):
         "wechat.analyze_publish_metrics",
         # publish settings
         "wechat.set_original",
+        "wechat.set_original_author",
         "wechat.set_reward",
         "wechat.inspect_publish_settings",
         "wechat.settle_publish_settings",
@@ -312,6 +315,302 @@ def test_click_publish_blocks_when_body_word_count_is_zero(monkeypatch):
     assert result.status == "failed"
     assert clicked["value"] is False
     assert result.state["body_word_count"] == 0
+
+
+def _publish_dialog_state(dialog_type: str, **overrides):
+    state = {
+        "dialog_type": dialog_type,
+        "url": "https://mp.weixin.qq.com/cgi-bin/appmsg?action=edit",
+        "dialog_text": "",
+        "buttons": [],
+        "matched_reason": f"test {dialog_type}",
+        "requires_relogin": False,
+        "requires_human_scan": dialog_type == "qrcode",
+    }
+    state.update(overrides)
+    return state
+
+
+class _PublishPage:
+    url = "https://mp.weixin.qq.com/cgi-bin/appmsg?action=edit"
+
+    def wait_for_timeout(self, timeout):  # noqa: ARG002
+        return None
+
+    def screenshot(self, path, full_page=True):  # noqa: ARG002
+        from pathlib import Path
+
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fake screenshot")
+
+
+def _patch_publish_preflight_and_first_click(monkeypatch):
+    from agent_news.models.operation import OperationResult
+    from agent_news.operations.wechat import save_publish
+
+    first_clicks = []
+    monkeypatch.setattr(
+        save_publish,
+        "_publish_preflight_result",
+        lambda page, **requirements: OperationResult.success(message="preflight ok"),
+    )
+    monkeypatch.setattr(save_publish, "_capture_publish_dialog_screenshot", lambda page, label: None)
+
+    def fake_click_required(page, selectors, *, step_name, timeout=0, settle_ms=0):  # noqa: ARG001
+        first_clicks.append(step_name)
+        return "#js_send button.mass_send"
+
+    monkeypatch.setattr(save_publish, "click_required_selector_once", fake_click_required)
+    return first_clicks
+
+
+def test_publish_modal_selector_profile_has_no_broad_fallbacks():
+    from agent_news.browser.selectors import get
+
+    selectors = get("publish_modal_button")
+
+    assert ".weui-desktop-dialog__wrp :text-is('发表')" not in selectors
+    assert ".weui-desktop-dialog__wrp .weui-desktop-dialog__bd div:has-text('发表')" not in selectors
+    assert ".weui-desktop-dialog__wrp [class*='send'] :has-text('发表')" not in selectors
+    assert all("button" in selector for selector in selectors)
+
+
+def test_publish_to_qrcode_stops_on_account_auth_error(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    _patch_publish_preflight_and_first_click(monkeypatch)
+    dialog_clicks = []
+    monkeypatch.setattr(
+        save_publish,
+        "_inspect_publish_dialog_state",
+        lambda page: _publish_dialog_state(
+            "account_auth_error",
+            dialog_text="未授权使用切换账号能力，请退出后扫码登录其他账号",
+            requires_relogin=True,
+        ),
+    )
+    monkeypatch.setattr(
+        save_publish,
+        "_click_visible_dialog_button_exact",
+        lambda page, text: dialog_clicks.append(text),
+    )
+
+    result = save_publish._publish_current_editor_to_qrcode(_PublishPage())
+
+    assert result.status == "failed"
+    assert result.state["requires_relogin"] is True
+    assert result.state["publish_dialog"]["dialog_type"] == "account_auth_error"
+    assert dialog_clicks == []
+
+
+def test_publish_to_qrcode_stops_on_unknown_dialog(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    _patch_publish_preflight_and_first_click(monkeypatch)
+    dialog_clicks = []
+    monkeypatch.setattr(
+        save_publish,
+        "_inspect_publish_dialog_state",
+        lambda page: _publish_dialog_state("unknown_dialog", dialog_text="未知弹窗", buttons=[{"text": "切换账号"}]),
+    )
+    monkeypatch.setattr(
+        save_publish,
+        "_click_visible_dialog_button_exact",
+        lambda page, text: dialog_clicks.append(text),
+    )
+
+    result = save_publish._publish_current_editor_to_qrcode(_PublishPage())
+
+    assert result.status == "failed"
+    assert result.state["publish_dialog"]["dialog_type"] == "unknown_dialog"
+    assert dialog_clicks == []
+
+
+def test_publish_to_qrcode_clicks_exact_publish_confirm(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    _patch_publish_preflight_and_first_click(monkeypatch)
+    states = iter([
+        _publish_dialog_state("publish_confirm", buttons=[{"text": "取消"}, {"text": "发表"}]),
+        _publish_dialog_state("qrcode", qrcode_selector="img.js_qrcode"),
+    ])
+    dialog_clicks = []
+    monkeypatch.setattr(save_publish, "_inspect_publish_dialog_state", lambda page: next(states))
+
+    def fake_click(page, text):  # noqa: ARG001
+        dialog_clicks.append(text)
+        return {"clicked": True, "text": text}
+
+    monkeypatch.setattr(save_publish, "_click_visible_dialog_button_exact", fake_click)
+
+    result = save_publish._publish_current_editor_to_qrcode(_PublishPage())
+
+    assert result.status == "ok"
+    assert result.state["reached_qrcode"] is True
+    assert result.state["requires_human_scan"] is True
+    assert dialog_clicks == ["发表"]
+
+
+def test_publish_to_qrcode_clicks_exact_continue_publish(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    _patch_publish_preflight_and_first_click(monkeypatch)
+    states = iter([
+        _publish_dialog_state("continue_publish", buttons=[{"text": "取消"}, {"text": "继续发表"}]),
+        _publish_dialog_state("qrcode", qrcode_selector="img.js_qrcode"),
+    ])
+    dialog_clicks = []
+    monkeypatch.setattr(save_publish, "_inspect_publish_dialog_state", lambda page: next(states))
+    monkeypatch.setattr(
+        save_publish,
+        "_click_visible_dialog_button_exact",
+        lambda page, text: dialog_clicks.append(text) or {"clicked": True, "text": text},
+    )
+
+    result = save_publish._publish_current_editor_to_qrcode(_PublishPage())
+
+    assert result.status == "ok"
+    assert result.state["reached_qrcode"] is True
+    assert result.state["continue_clicks"] == 1
+    assert dialog_clicks == ["继续发表"]
+
+
+def test_publish_to_qrcode_clicks_exact_no_notify_continue(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    _patch_publish_preflight_and_first_click(monkeypatch)
+    states = iter([
+        _publish_dialog_state(
+            "publish_no_notify",
+            dialog_text="未开启群发通知 内容将展示在公众号主页",
+            buttons=[{"text": "取消"}, {"text": "继续发表"}],
+        ),
+        _publish_dialog_state("qrcode", qrcode_selector="img.js_qrcode"),
+    ])
+    dialog_clicks = []
+    monkeypatch.setattr(save_publish, "_inspect_publish_dialog_state", lambda page: next(states))
+    monkeypatch.setattr(
+        save_publish,
+        "_click_visible_dialog_button_exact",
+        lambda page, text: dialog_clicks.append(text) or {"clicked": True, "text": text},
+    )
+
+    result = save_publish._publish_current_editor_to_qrcode(_PublishPage())
+
+    assert result.status == "ok"
+    assert result.state["reached_qrcode"] is True
+    assert result.state["continue_clicks"] == 1
+    assert dialog_clicks == ["继续发表"]
+    assert any(log["step"] == "confirm_publish_no_notify" for log in result.state["publish_step_logs"])
+
+
+def test_confirm_publish_no_notify_only_clicks_no_notify_state(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    dialog_clicks = []
+    monkeypatch.setattr(
+        save_publish,
+        "_inspect_publish_dialog_state",
+        lambda page: _publish_dialog_state(
+            "publish_no_notify",
+            dialog_text="未开启群发通知",
+            buttons=[{"text": "继续发表"}],
+        ),
+    )
+    monkeypatch.setattr(
+        save_publish,
+        "_click_visible_dialog_button_exact",
+        lambda page, text: dialog_clicks.append(text) or {"clicked": True, "text": text},
+    )
+    monkeypatch.setattr(
+        save_publish.BROWSER_MANAGER,
+        "with_session",
+        lambda channel=None, *, action_fn, **kwargs: action_fn(None, _PublishPage()),  # noqa: ARG005
+    )
+
+    result = save_publish.confirm_publish_no_notify(None)
+
+    assert result.status == "ok"
+    assert result.state["publish_no_notify_confirmed"] is True
+    assert dialog_clicks == ["继续发表"]
+
+
+def test_confirm_publish_no_notify_refuses_other_states(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    dialog_clicks = []
+    monkeypatch.setattr(
+        save_publish,
+        "_inspect_publish_dialog_state",
+        lambda page: _publish_dialog_state("continue_publish", buttons=[{"text": "继续发表"}]),
+    )
+    monkeypatch.setattr(
+        save_publish,
+        "_click_visible_dialog_button_exact",
+        lambda page, text: dialog_clicks.append(text),
+    )
+    monkeypatch.setattr(
+        save_publish.BROWSER_MANAGER,
+        "with_session",
+        lambda channel=None, *, action_fn, **kwargs: action_fn(None, _PublishPage()),  # noqa: ARG005
+    )
+
+    result = save_publish.confirm_publish_no_notify(None)
+
+    assert result.status == "failed"
+    assert result.state["publish_dialog"]["dialog_type"] == "continue_publish"
+    assert dialog_clicks == []
+
+
+def test_inspect_publish_dialog_classifies_no_notify(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    class _NoNotifyPage:
+        url = "https://mp.weixin.qq.com/cgi-bin/appmsg?action=edit"
+
+        def evaluate(self, script, arg=None):  # noqa: ARG002
+            return {
+                "dialog_found": True,
+                "publish_no_notify_panel_visible": True,
+                "dialog_text": "未开启群发通知 内容将展示在公众号主页",
+                "page_text": "未开启群发通知 内容将展示在公众号主页",
+                "buttons": [
+                    {"text": "取消", "visible": True, "disabled": False},
+                    {"text": "继续发表", "visible": True, "disabled": False, "primary": True},
+                ],
+            }
+
+    monkeypatch.setattr(save_publish, "pick_selector", lambda page, selectors, timeout=0: None)
+
+    state = save_publish._inspect_publish_dialog_state(_NoNotifyPage())
+
+    assert state["dialog_type"] == "publish_no_notify"
+    assert state["matched_button"]["text"] == "继续发表"
+
+
+def test_publish_to_qrcode_returns_qrcode_without_extra_click(monkeypatch):
+    from agent_news.operations.wechat import save_publish
+
+    _patch_publish_preflight_and_first_click(monkeypatch)
+    dialog_clicks = []
+    monkeypatch.setattr(
+        save_publish,
+        "_inspect_publish_dialog_state",
+        lambda page: _publish_dialog_state("qrcode", qrcode_selector="img.js_qrcode"),
+    )
+    monkeypatch.setattr(
+        save_publish,
+        "_click_visible_dialog_button_exact",
+        lambda page, text: dialog_clicks.append(text),
+    )
+
+    result = save_publish._publish_current_editor_to_qrcode(_PublishPage())
+
+    assert result.status == "ok"
+    assert result.state["reached_qrcode"] is True
+    assert result.state["requires_human_scan"] is True
+    assert dialog_clicks == []
 
 
 def test_set_original_disabled_skips(client):
