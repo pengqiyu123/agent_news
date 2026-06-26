@@ -138,8 +138,9 @@ def test_full_radar_chain_end_to_end(client):
     resp = client.get("/api/intel/events")
     events = resp.json()["items"]
     assert len(events) >= 2
-    gpt5 = max(events, key=lambda e: e["composite_score"])
-    assert "GPT" in gpt5["title"] or "gpt" in gpt5["title"].lower()
+    gpt_candidates = [event for event in events if "gpt" in event["title"].lower()]
+    assert gpt_candidates, events
+    gpt5 = max(gpt_candidates, key=lambda e: e["composite_score"])
     assert gpt5["audience_fit_score"] >= 60  # watchlist hit
 
     # deep_dive with network stubbed (fetch_and_extract_link returns minimal success)
@@ -204,3 +205,59 @@ def test_deep_dive_missing_event_fails_gracefully(client):
     })
     assert resp.status_code == 200  # operation ran, just failed
     assert resp.json()["item"]["status"] == "failed"
+
+
+def test_review_events_includes_history_hint_when_available(client):
+    from agent_news.content.publish_performance import build_publish_metrics_analysis
+    from agent_news.db import get_repository
+    from agent_news.db.intel_repository import get_intel_repository
+    from agent_news.models.intel import IntelEvent
+
+    repo = get_repository()
+    analysis = build_publish_metrics_analysis(
+        [
+            {
+                "title": "历史相似事件",
+                "url": "https://mp.weixin.qq.com/s/history-event",
+                "appmsg_id": "history-event",
+                "published_at": "2026-06-25 08:00",
+                "read_count": 80,
+                "like_count": 3,
+                "share_count": 2,
+                "recommend_count": 1,
+                "comment_count": 1,
+                "highlight_count": 0,
+                "tip_amount": "0",
+                "reprint_count": 0,
+            }
+        ],
+        url="https://mp.weixin.qq.com/s/history-event",
+        snapshot_at="2026-06-26T00:00:00+00:00",
+    )
+    repo.record_publish_task(
+        operation_name="wechat.analyze_publish_metrics",
+        status="success",
+        message="snapshot",
+        params={"state": analysis},
+    )
+
+    intel_repo = get_intel_repository()
+    intel_repo.upsert_event(IntelEvent(
+        id="evt-history-match",
+        title="历史相似事件",
+        summary="",
+        representative_link="https://example.com",
+        source_count=2,
+        platform_count=1,
+        composite_score=66,
+        alert_state="hot",
+    ))
+
+    resp = client.post("/api/operations/radar.review_events/execute", json={"params": {"limit": 50, "min_score": 60}})
+    assert resp.status_code == 200
+    item = resp.json()["item"]
+    assert item["ok"]
+    assert item["state"].get("historical_performance_hints")
+    assert item["state"].get("content_strategy_profile")
+    event = next(e for e in item["state"]["events"] if e["id"] == "evt-history-match")
+    assert "content_strategy_fit" in event

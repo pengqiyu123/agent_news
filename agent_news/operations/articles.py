@@ -8,6 +8,12 @@ from __future__ import annotations
 
 from ..content.article_quality import review_article_quality
 from ..content.wechat_payload import prepare_wechat_payload as build_wechat_payload
+from ..content.publish_performance import (
+    build_title_history_hint,
+    evaluate_title_strategy_fit,
+    latest_content_strategy_profile,
+    summarize_title_history,
+)
 from ..db import get_repository
 from ..db.intel_repository import get_intel_repository
 from ..models.operation import OperationResult
@@ -131,13 +137,34 @@ def review_quality(ctx, article_id: str) -> OperationResult:
         return OperationResult.failure(message=f"article '{article_id}' not found")
     dives = _load_deep_dives_for_article(article)
     report = review_article_quality(article, deep_dives=dives)
+    history_tasks, _ = get_repository().list_publish_tasks(limit=100)
+    similar_snapshots = summarize_title_history(history_tasks, title=article.title, limit=5)
+    history_hint = build_title_history_hint(article.title, similar_snapshots) if similar_snapshots else {}
+    content_strategy_profile = latest_content_strategy_profile(history_tasks)
+    strategy_fit = evaluate_title_strategy_fit(article.title, content_strategy_profile)
     payload = {
         "article_id": article.id,
         "material_id": article.material_id,
         "quality_report": report.as_dict(),
         "ready_for_wechat_payload": report.passed,
         "suggested_next_operation": report.suggested_next_operation,
+        "content_strategy_profile": content_strategy_profile,
+        "content_strategy_fit": strategy_fit,
     }
+    payload["quality_report"]["metrics"]["content_strategy_fit"] = strategy_fit
+    if content_strategy_profile.get("available"):
+        payload["quality_report"]["metrics"]["content_strategy_profile"] = content_strategy_profile
+    if strategy_fit.get("label") == "weak":
+        payload["quality_report"]["warnings"].append(
+            "运营策略弱匹配：" + "；".join(strategy_fit.get("warnings") or [])
+        )
+    if history_hint:
+        payload["historical_performance_hint"] = history_hint
+        payload["quality_report"]["metrics"]["historical_performance_hint"] = history_hint
+        if history_hint.get("best_title"):
+            payload["quality_report"]["warnings"].append(
+                f"历史相似标题表现参考：{history_hint.get('best_title')}（{history_hint.get('best_summary', {}).get('total_reads', 0)} 阅读）"
+            )
     if not report.passed:
         return OperationResult.failure(
             message="article quality gate failed: " + "; ".join(report.issues),

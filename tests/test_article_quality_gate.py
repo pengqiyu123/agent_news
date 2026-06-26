@@ -162,6 +162,51 @@ def test_article_prepare_wechat_payload_passes_for_ready_long_article():
     assert state["suggested_steps"][0]["op"] == "wechat.fill_editor_required"
 
 
+def test_article_review_quality_includes_content_strategy_fit():
+    from agent_news.content.publish_performance import build_publish_metrics_analysis
+    from agent_news.db import get_repository
+
+    client = _client()
+    _upsert_deep_dive(dive_id="dive-strategy-fit", fact_count=6, success_count=2, status="ready")
+    analysis = build_publish_metrics_analysis(
+        [
+            {
+                "title": "三星2nm翻车、苹果涨价、美国缺电：AI正在掏空你的钱包和电网",
+                "url": "https://mp.weixin.qq.com/s/strategy-fit",
+                "published_at": "2026-06-26 20:00",
+                "read_count": 134,
+                "share_count": 3,
+            }
+        ],
+        snapshot_at="2026-06-26T12:00:00+00:00",
+    )
+    get_repository().record_publish_task(
+        operation_name="wechat.analyze_publish_metrics",
+        status="success",
+        message="snapshot",
+        params={"state": {"analysis": analysis}},
+    )
+    resp = client.post("/api/operations/article.create/execute", json={
+        "params": {
+            "title": "OpenAI成本砍半：开发者账单开始重新计算",
+            "author": "AgentNews",
+            "digest": "OpenAI 芯片进展可能改变推理成本。",
+            "body_markdown": _long_article_body(),
+            "material_id": "dive-strategy-fit",
+        }
+    })
+    article_id = resp.json()["item"]["state"]["article_id"]
+
+    resp = client.post("/api/operations/article.review_quality/execute", json={
+        "params": {"article_id": article_id}
+    })
+    item = resp.json()["item"]
+    assert item["ok"]
+    fit = item["state"]["content_strategy_fit"]
+    assert fit["label"] in ("partial", "strong")
+    assert "成本" in fit["matched_impact_keywords"]
+
+
 def test_five_item_digest_accepts_five_ready_materials_without_override():
     client = _client()
     material_ids = []

@@ -697,6 +697,55 @@ def test_publish_metrics_analysis_extracts_quality_signals():
     assert result["matched_item"]["quality_score"] > 100
 
 
+def test_publish_metrics_analysis_supports_exact_url_matching():
+    from agent_news.operations.wechat.history import _analyze_publish_metrics
+
+    items = [
+        {
+            "title": "同标题文章",
+            "url": "https://mp.weixin.qq.com/s/abc123",
+            "appmsg_id": "10001",
+            "published_at": "2026-06-25 10:00",
+            "read_count": 10,
+            "like_count": 1,
+            "share_count": 0,
+            "recommend_count": 0,
+            "comment_count": 0,
+            "highlight_count": 0,
+            "tip_amount": "0",
+            "reprint_count": 0,
+        },
+        {
+            "title": "同标题文章",
+            "url": "https://mp.weixin.qq.com/s/def456",
+            "appmsg_id": "10002",
+            "published_at": "2026-06-25 11:00",
+            "read_count": 20,
+            "like_count": 2,
+            "share_count": 1,
+            "recommend_count": 0,
+            "comment_count": 0,
+            "highlight_count": 0,
+            "tip_amount": "0",
+            "reprint_count": 0,
+        },
+    ]
+
+    result = _analyze_publish_metrics(items, url="https://mp.weixin.qq.com/s/def456")
+    assert result["target_found"] is True
+    assert result["target_status"] == "exact_url"
+    assert result["analysis_key"].startswith("url:https://mp.weixin.qq.com/s/def456")
+    assert result["summary"]["total_reads"] == 20
+
+
+def test_review_content_performance_requires_locator(client):
+    resp = client.post("/api/operations/wechat.review_content_performance/execute", json={"params": {}})
+    assert resp.status_code == 200
+    item = resp.json()["item"]
+    assert item["status"] == "failed"
+    assert "title 或 url" in item["message"]
+
+
 def _patch_delete_publish_record_nav(monkeypatch):
     from agent_news.operations.wechat import history
 

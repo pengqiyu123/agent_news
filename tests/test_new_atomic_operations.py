@@ -38,6 +38,7 @@ def test_new_operations_registered():
         "wechat.focus_editor_tab",
         "wechat.close_blank_tabs",
         "wechat.upload_cover_file",
+        "wechat.review_content_strategy",
     }
     assert expected <= names
 
@@ -170,6 +171,89 @@ def test_article_operations_and_wechat_payload():
     assert state["suggested_steps"][0]["op"] == "wechat.fill_editor_required"
     assert "文字" in state["cover_prompt"]
     assert "海报" in state["cover_prompt"]
+
+
+def test_publish_task_snapshot_lookup_by_analysis_key():
+    from agent_news.content.publish_performance import build_publish_metrics_analysis
+    from agent_news.db import get_repository
+
+    repo = get_repository()
+    analysis = build_publish_metrics_analysis(
+        [
+            {
+                "title": "快照测试文章",
+                "url": "https://mp.weixin.qq.com/s/snapshot",
+                "appmsg_id": "snapshot-1",
+                "published_at": "2026-06-25 09:00",
+                "read_count": 12,
+                "like_count": 1,
+                "share_count": 0,
+                "recommend_count": 0,
+                "comment_count": 0,
+                "highlight_count": 0,
+                "tip_amount": "0",
+                "reprint_count": 0,
+            }
+        ],
+        url="https://mp.weixin.qq.com/s/snapshot",
+        snapshot_at="2026-06-26T00:00:00+00:00",
+    )
+    repo.record_publish_task(
+        operation_name="wechat.analyze_publish_metrics",
+        status="success",
+        message="snapshot",
+        params={"state": analysis},
+    )
+
+    items, total = repo.list_publish_task_snapshots(
+        operation_name="wechat.analyze_publish_metrics",
+        analysis_key=analysis["analysis_key"],
+        limit=5,
+    )
+    assert total >= 1
+    assert items
+    assert items[0].operation_name == "wechat.analyze_publish_metrics"
+
+
+def test_review_content_performance_operation_registered():
+    client = _client()
+    names = {op["name"] for op in client.get("/api/operations").json()["items"]}
+    assert "wechat.review_content_performance" in names
+
+
+def test_review_content_strategy_uses_latest_metrics_snapshot():
+    from agent_news.content.publish_performance import build_publish_metrics_analysis
+    from agent_news.db import get_repository
+
+    repo = get_repository()
+    analysis = build_publish_metrics_analysis(
+        [
+            {
+                "title": "三星2nm翻车、苹果涨价、美国缺电：AI正在掏空你的钱包和电网",
+                "url": "https://mp.weixin.qq.com/s/strategy",
+                "published_at": "2026-06-26 20:00",
+                "read_count": 134,
+                "share_count": 3,
+            }
+        ],
+        snapshot_at="2026-06-26T12:00:00+00:00",
+    )
+    repo.record_publish_task(
+        operation_name="wechat.analyze_publish_metrics",
+        status="success",
+        message="snapshot",
+        params={"state": {"analysis": analysis}},
+    )
+
+    client = _client()
+    resp = client.post("/api/operations/wechat.review_content_strategy/execute", json={"params": {}})
+    assert resp.status_code == 200
+    item = resp.json()["item"]
+    assert item["ok"]
+    profile = item["state"]["content_strategy_profile"]
+    assert profile["available"] is True
+    assert "涨价" in profile["impact_keywords"]
+    assert profile["winning_titles"][0]["read_count"] == 134
 
 
 def test_prepare_wechat_payload_requires_author():

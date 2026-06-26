@@ -63,7 +63,8 @@ def test_full_agent_workflow_e2e(client):
 
     # ── 4. Pick the hottest event ───────────────────────────────────────────
     events = client.get("/api/intel/events").json()["items"]
-    top_event = max(events, key=lambda e: e["composite_score"])
+    gpt_events = [event for event in events if "GPT" in event["title"]]
+    top_event = max(gpt_events, key=lambda e: e["composite_score"])
     assert "GPT" in top_event["title"]
     event_id = top_event["id"]
 

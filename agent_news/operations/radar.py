@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from ..db.intel_repository import get_intel_repository
+from ..db import get_repository
 from ..intel.normalize import normalize_raw_items
 from ..intel.cluster import cluster_discovery_items
 from ..intel.score import build_events_from_clusters, materialize_alerts
@@ -28,6 +29,7 @@ from ..intel.review import (
     review_deep_dive_state,
     summarize_event,
 )
+from ..content.publish_performance import evaluate_title_strategy_fit, latest_content_strategy_profile, summarize_title_history
 from ..intel.source_discovery import (
     dedupe_source,
     normalize_candidates,
@@ -309,6 +311,35 @@ def review_events(
     ignored = None if include_ignored else False
     events, total = repo.list_events(limit=max(1, int(limit)), ignored=ignored, min_score=min_score)
     state = build_event_review(events, total=total, watchlist=watchlist)
+    try:
+        history_tasks, _ = get_repository().list_publish_tasks(limit=100)
+    except Exception:
+        history_tasks = []
+    content_strategy_profile = latest_content_strategy_profile(history_tasks)
+    history_hints = {}
+    for event in state.get("events") or []:
+        title = str(event.get("title") or "")
+        strategy_fit = evaluate_title_strategy_fit(title, content_strategy_profile)
+        event["content_strategy_fit"] = strategy_fit
+        if content_strategy_profile.get("available"):
+            event.setdefault("why_recommended", [])
+            if strategy_fit.get("label") == "strong":
+                event["why_recommended"].append("命中当前公众号高表现内容策略")
+            elif strategy_fit.get("label") == "weak":
+                event.setdefault("risks", [])
+                event["risks"].append("与当前公众号高表现内容策略弱匹配")
+        similar = summarize_title_history(history_tasks, title=title, limit=3)
+        if similar:
+            history_hints[event.get("id")] = {
+                "similar_count": len(similar),
+                "top_titles": [item.get("title") for item in similar if item.get("title")][:3],
+            }
+            event.setdefault("why_recommended", [])
+            event["why_recommended"].append("历史相似标题在发表记录中出现过")
+            event["history_hint"] = history_hints[event.get("id")]
+    if history_hints:
+        state["historical_performance_hints"] = history_hints
+    state["content_strategy_profile"] = content_strategy_profile
     if not events:
         state["suggested_next_operation"] = "radar.sync_sources"
         return OperationResult.success(message="no events available; run radar.sync_sources then radar.build_events", **state)

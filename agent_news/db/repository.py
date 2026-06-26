@@ -379,6 +379,49 @@ class Repository:
             row = session.get(PublishTaskRow, task_id)
             return self._row_to_publish_task(row) if row else None
 
+    def list_publish_task_snapshots(
+        self,
+        *,
+        operation_name: str,
+        analysis_key: str = "",
+        limit: int = 10,
+    ) -> tuple[list[PublishTask], int]:
+        """Return recent publish-task rows for one analysis key.
+
+        The analysis key lives inside params.state.analysis_key, so this method
+        queries the audit table directly and then filters the nested JSON state.
+        It keeps the project schema untouched while still giving callers a
+        stable historical lookup primitive.
+        """
+        from sqlalchemy import func, select
+
+        max_limit = max(1, min(int(limit), 200))
+        try:
+            with self.transaction() as session:
+                stmt = select(PublishTaskRow).where(PublishTaskRow.operation_name == operation_name)
+                if analysis_key:
+                    stmt = stmt.where(
+                        func.coalesce(func.json_extract(PublishTaskRow.params, "$.state.analysis_key"), "") == analysis_key
+                    )
+                count_stmt = select(func.count()).select_from(stmt.subquery())
+                total = session.scalar(count_stmt) or 0
+                rows = session.scalars(stmt.order_by(PublishTaskRow.started_at.desc()).limit(max_limit)).all()
+                return [self._row_to_publish_task(row) for row in rows], total
+        except Exception:
+            items, total = self.list_publish_tasks(limit=1000)
+            filtered = []
+            for item in items:
+                if item.operation_name != operation_name:
+                    continue
+                state = (item.params or {}).get("state") if isinstance(item.params, dict) else {}
+                if not isinstance(state, dict):
+                    continue
+                item_key = str(state.get("analysis_key") or "").strip()
+                if analysis_key and item_key != analysis_key:
+                    continue
+                filtered.append(item)
+            return filtered[:max_limit], len(filtered)
+
     def _row_to_publish_task(self, row: PublishTaskRow) -> PublishTask:
         return PublishTask(
             id=row.id,

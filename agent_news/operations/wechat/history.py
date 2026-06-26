@@ -14,6 +14,14 @@ from typing import Any
 from ...browser import BROWSER_MANAGER, WECHAT_HOME_URL, default_wechat_channel, get_selectors
 from ...browser.dom import page_url, pick_selector
 from ...config import get_settings
+from ...content.publish_performance import (
+    build_content_performance_review,
+    build_publish_metrics_analysis,
+    latest_content_strategy_profile,
+    build_title_history_hint,
+    summarize_task_snapshots,
+)
+from ...db import get_repository
 from ...models.operation import OperationResult
 from ..base import operation
 
@@ -1719,102 +1727,14 @@ def _metric_score(item: dict[str, Any]) -> float:
     )
 
 
-def _rate(numerator: int, denominator: int) -> float:
-    if denominator <= 0:
-        return 0.0
-    return round(numerator / denominator, 4)
-
-
-def _enrich_metric_item(item: dict[str, Any]) -> dict[str, Any]:
-    reads = int(item.get("read_count") or 0)
-    likes = int(item.get("like_count") or 0)
-    shares = int(item.get("share_count") or 0)
-    recommends = int(item.get("recommend_count") or 0)
-    comments = int(item.get("comment_count") or 0)
-    highlights = int(item.get("highlight_count") or 0)
-    reprints = int(item.get("reprint_count") or 0)
-    tip_amount = _to_float_money(item.get("tip_amount"))
-    engagement_actions = likes + shares + recommends + comments + highlights + reprints
-    return {
-        **item,
-        "tip_amount_numeric": tip_amount,
-        "engagement_actions": engagement_actions,
-        "engagement_rate": _rate(engagement_actions, reads),
-        "like_rate": _rate(likes, reads),
-        "share_rate": _rate(shares, reads),
-        "comment_rate": _rate(comments, reads),
-        "quality_score": round(_metric_score(item), 2),
-        "signals": {
-            "audience_reach": reads,
-            "audience_approval": likes + recommends,
-            "spread": shares + reprints,
-            "discussion": comments,
-            "deep_reading": highlights,
-            "monetization": tip_amount,
-        },
-    }
-
-
-def _analyze_publish_metrics(items: list[dict[str, Any]], *, title: str = "") -> dict[str, Any]:
-    enriched = [_enrich_metric_item(item) for item in items]
-    matched = _find_item_by_title(enriched, title) if title else None
-    scope_items = [matched] if matched else enriched
-    scope_items = [item for item in scope_items if item]
-
-    total_reads = sum(int(item.get("read_count") or 0) for item in scope_items)
-    total_likes = sum(int(item.get("like_count") or 0) for item in scope_items)
-    total_shares = sum(int(item.get("share_count") or 0) for item in scope_items)
-    total_recommends = sum(int(item.get("recommend_count") or 0) for item in scope_items)
-    total_comments = sum(int(item.get("comment_count") or 0) for item in scope_items)
-    total_highlights = sum(int(item.get("highlight_count") or 0) for item in scope_items)
-    total_reprints = sum(int(item.get("reprint_count") or 0) for item in scope_items)
-    total_tips = round(sum(float(item.get("tip_amount_numeric") or 0) for item in scope_items), 2)
-    total_engagement = total_likes + total_shares + total_recommends + total_comments + total_highlights + total_reprints
-
-    sorted_by_score = sorted(enriched, key=lambda item: float(item.get("quality_score") or 0), reverse=True)
-    sorted_by_reads = sorted(enriched, key=lambda item: int(item.get("read_count") or 0), reverse=True)
-    sorted_by_share_rate = sorted(
-        [item for item in enriched if int(item.get("read_count") or 0) > 0],
-        key=lambda item: float(item.get("share_rate") or 0),
-        reverse=True,
-    )
-
-    return {
-        "scope": "matched_title" if matched else "all_items",
-        "target_found": bool(matched) if title else None,
-        "matched_item": matched,
-        "summary": {
-            "item_count": len(scope_items),
-            "total_reads": total_reads,
-            "total_likes": total_likes,
-            "total_shares": total_shares,
-            "total_recommends": total_recommends,
-            "total_comments": total_comments,
-            "total_highlights": total_highlights,
-            "total_reprints": total_reprints,
-            "total_tip_amount": total_tips,
-            "total_engagement_actions": total_engagement,
-            "overall_engagement_rate": _rate(total_engagement, total_reads),
-            "overall_like_rate": _rate(total_likes, total_reads),
-            "overall_share_rate": _rate(total_shares, total_reads),
-            "overall_comment_rate": _rate(total_comments, total_reads),
-        },
-        "top_items": {
-            "by_quality_score": sorted_by_score[:5],
-            "by_reads": sorted_by_reads[:5],
-            "by_share_rate": sorted_by_share_rate[:5],
-        },
-        "metric_meaning": {
-            "read_count": "阅读人数，衡量触达和选题吸引力",
-            "like_count": "点赞人数，衡量认可度",
-            "share_count": "分享人数，衡量传播性",
-            "recommend_count": "推荐人数，衡量平台内推荐意愿",
-            "comment_count": "留言条数，衡量讨论度",
-            "highlight_count": "划线人数，衡量深读和摘录价值",
-            "tip_amount": "赞赏金额，衡量付费认可",
-            "reprint_count": "被转载次数，衡量外部引用和扩散",
-        },
-    }
+def _analyze_publish_metrics(
+    items: list[dict[str, Any]],
+    *,
+    title: str = "",
+    url: str = "",
+    snapshot_at: str | None = None,
+) -> dict[str, Any]:
+    return build_publish_metrics_analysis(items, title=title, url=url, snapshot_at=snapshot_at)
 
 
 @operation(
@@ -2301,28 +2221,169 @@ def change_publish_record_claim_source(
     ),
     params={
         "title": "可选，目标文章标题；传入时优先分析该文章，未命中则分析全部抓取记录",
+        "url": "可选，目标文章链接；同标题多篇时优先使用",
         "limit": "最多分析多少条，默认 20",
         "max_pages": "最多翻页数，默认 3",
     },
 )
-def analyze_publish_metrics(ctx, title: str = "", limit: int = 20, max_pages: int = 3) -> OperationResult:
+def analyze_publish_metrics(ctx, title: str = "", url: str = "", limit: int = 20, max_pages: int = 3) -> OperationResult:
     def _run(_context, page):
         nav_logs: list[str] = []
         if not _open_publish_history_on_page(page, nav_logs):
             return OperationResult.failure(message=f"未能进入发表记录页（URL={page_url(page)}）", step_logs=nav_logs)
         items, scrape_logs = _scrape_publish_history_pages(page, max_pages=max_pages, limit=limit)
-        analysis = _analyze_publish_metrics(items, title=title)
+        analysis = _analyze_publish_metrics(items, title=title, url=url, snapshot_at=_utcnow())
         return OperationResult.success(
             message="发表记录指标分析完成",
             step_logs=nav_logs + scrape_logs,
             items=items,
             count=len(items),
             title=title,
+            target_url=url,
+            analysis_key=analysis.get("analysis_key"),
+            analysis_snapshot_at=analysis.get("analysis_snapshot_at"),
             analysis=analysis,
-            url=page_url(page),
+            content_strategy_profile=latest_content_strategy_profile([
+                {
+                    "operation_name": "wechat.analyze_publish_metrics",
+                    "status": "success",
+                    "params": {"state": {"analysis": analysis}},
+                }
+            ]),
+            current_url=page_url(page),
         )
 
     try:
         return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run, reset_on_failure=False)
     except Exception as e:
         return OperationResult.failure(message=f"analyze_publish_metrics 失败: {type(e).__name__}: {e}")
+
+
+@operation(
+    name="wechat.review_content_strategy",
+    category="review",
+    description="只读：读取最近发表指标快照，生成可被雷达和文章质量门禁复用的运营策略画像。",
+    params={"lookback_runs": "读取最近多少条审计记录，默认 20"},
+)
+def review_content_strategy(ctx, lookback_runs: int = 20) -> OperationResult:
+    try:
+        limit = max(1, min(int(lookback_runs), 200))
+        tasks, _ = get_repository().list_publish_tasks(limit=limit)
+        profile = latest_content_strategy_profile(tasks)
+        if not profile.get("available"):
+            return OperationResult.skip(
+                message=profile.get("message") or "尚无可用运营策略画像",
+                content_strategy_profile=profile,
+                suggested_next_operation=profile.get("suggested_next_operation"),
+            )
+        return OperationResult.success(
+            message="公众号内容策略画像已生成",
+            content_strategy_profile=profile,
+            suggested_next_operation=profile.get("suggested_next_operation"),
+        )
+    except Exception as e:
+        return OperationResult.failure(message=f"review_content_strategy 失败: {type(e).__name__}: {e}")
+
+
+@operation(
+    name="wechat.review_content_performance",
+    category="review",
+    description=(
+        "只读：基于发表记录的多页指标抓取与历史快照，输出复盘判断、强弱标签、"
+        "可复用模式和下一步建议。"
+    ),
+    params={
+        "title": "可选，目标文章标题；优先做精确命中，歧义时必须补 url",
+        "url": "可选，目标文章链接；优先于 title",
+        "max_pages": "抓取发表记录的最多翻页数，默认 3",
+        "lookback_runs": "历史快照回看条数，默认 5",
+    },
+)
+def review_content_performance(
+    ctx,
+    title: str = "",
+    url: str = "",
+    max_pages: int = 3,
+    lookback_runs: int = 5,
+) -> OperationResult:
+    if not str(title or "").strip() and not str(url or "").strip():
+        return OperationResult.failure(
+            message="review_content_performance 需要 title 或 url 用于定位目标文章",
+            suggested_next_operation="wechat.analyze_publish_metrics",
+        )
+
+    def _run(_context, page):
+        nav_logs: list[str] = []
+        if not _open_publish_history_on_page(page, nav_logs):
+            return OperationResult.failure(message=f"未能进入发表记录页（URL={page_url(page)}）", step_logs=nav_logs)
+
+        items, scrape_logs = _scrape_publish_history_pages(page, max_pages=max_pages, limit=80)
+        analysis = _analyze_publish_metrics(items, title=title, url=url, snapshot_at=_utcnow())
+        if analysis.get("target_status") in ("ambiguous_title", "target_not_found") and (title or url):
+            return OperationResult.failure(
+                message=(
+                    "无法唯一定位要复盘的文章："
+                    + ("标题歧义" if analysis.get("target_status") == "ambiguous_title" else "未找到目标")
+                ),
+                step_logs=nav_logs + scrape_logs,
+                analysis=analysis,
+                target_found=False,
+                target_status=analysis.get("target_status"),
+                suggested_next_operation="wechat.review_publish_history",
+            )
+
+        analysis_key = str(analysis.get("analysis_key") or "").strip()
+        if not analysis_key:
+            return OperationResult.failure(
+                message="复盘分析缺少稳定 analysis_key，无法继续做历史对比",
+                step_logs=nav_logs + scrape_logs,
+                analysis=analysis,
+                suggested_next_operation="wechat.analyze_publish_metrics",
+            )
+
+        repo = get_repository()
+        history_rows, _ = repo.list_publish_task_snapshots(
+            operation_name="wechat.analyze_publish_metrics",
+            analysis_key=analysis_key,
+            limit=max(1, int(lookback_runs)),
+        )
+        history_snapshots = summarize_task_snapshots(
+            history_rows,
+            operation_name="wechat.analyze_publish_metrics",
+            analysis_key=analysis_key,
+            limit=max(1, int(lookback_runs)),
+        )
+        review = build_content_performance_review(analysis, history_snapshots)
+        hint = build_title_history_hint(title or str(analysis.get("requested_title") or ""), history_snapshots)
+        if hint.get("similar_count"):
+            review["title_history_hint"] = hint
+
+        state = {
+            "analysis": analysis,
+            "analysis_key": analysis_key,
+            "analysis_snapshot_at": analysis.get("analysis_snapshot_at"),
+            "history_snapshots": history_snapshots,
+            "lookback_runs": max(1, int(lookback_runs)),
+            "review": review,
+            "performance_label": review.get("performance_label"),
+            "trend": review.get("trend"),
+            "delta": review.get("delta"),
+            "weakness_tags": review.get("weakness_tags"),
+            "winning_patterns": review.get("winning_patterns"),
+            "next_content_guidance": review.get("next_content_guidance"),
+            "suggested_next_operation": review.get("suggested_next_operation"),
+            "analysis_key": analysis_key,
+        }
+        if hint.get("similar_count"):
+            state["title_history_hint"] = hint
+
+        return OperationResult.success(
+            message="公众号内容表现复盘完成",
+            step_logs=nav_logs + scrape_logs,
+            **state,
+        )
+
+    try:
+        return BROWSER_MANAGER.with_session(_CHANNEL, action_fn=_run, reset_on_failure=False)
+    except Exception as e:
+        return OperationResult.failure(message=f"review_content_performance 失败: {type(e).__name__}: {e}")

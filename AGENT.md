@@ -10,6 +10,7 @@
 - 微信页面选择器、点击逻辑、导航流程已经内置在 `agent_news/browser/` 和 `agent_news/operations/wechat/`。其他 AI 只能调用这些原子操作或维护本项目内代码，不能要求读取外部项目。
 - 遇到微信 DOM 相关问题，先用本项目的 `wechat.session`、`wechat.inspect_tabs`、`wechat.review_draft_box`、`wechat.publish_preflight` 和已有 selector profile 定位问题；不要猜 DOM，也不要搜索前端 HTML。
 - 允许改造的方向是：把本项目已有稳定实现继续拆成原子操作、参数化、可观测、可测试。禁止把流程退回成固定大脚本。
+- 每次完成代码或文档更新后，必须先做必要验证，再用中文 commit message 说明本次新增/修复内容，并推送到 GitHub `origin/main`。
 
 ## 核心理念
 
@@ -95,6 +96,7 @@ radar.review_deep_dive       只读复核素材是否足够写文章，并返回
 文章桥接：
 - `article.create/get/list/update` 是 Agent 保存成稿的统一操作面。
 - 写文章前必须读取 `radar.review_deep_dive` 或 deep-dive 详情里的 `article_writing_guide`。这份规约已经内置在本项目，包含标题策略、短讯合集结构、禁用 AI 味词和事实纪律。
+- 写稿和选题前还要读取 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`。这是基于真实发表记录沉淀的运营复盘记忆，用于判断当前账号更适合的标题结构、选题方向和避坑点。
 - 标题可以在 Agent 内部推演 2-3 个候选，但最终只能保存 1 个定稿标题到 `article.title`；不要把标题选择题抛给用户，也不要把多个候选写进文章正文。
 - `article.review_quality` 是平台执行前的独立 Critique 原子；不通过时只允许修改文章或继续深挖，不能进入微信填写。
 - `article.prepare_wechat_payload` 把文章转成微信填写参数，不打开浏览器，不自动发布。
@@ -103,7 +105,7 @@ radar.review_deep_dive       只读复核素材是否足够写文章，并返回
 - `override_quality_gate=true` 只允许人工明确确认的例外，不可作为日常绕过素材不足的办法。
 - 默认封面提示词必须是具象物品/场景类图片描述，例如芯片、手机、办公桌、实验台、合同和计算器，不生成文字海报类提示词。
 
-### 链 B：微信发布（导航 → 编辑 → 设置 → 保存/发表）
+### 链 B：微信发布（导航 → 编辑 → 设置 → 保存/发表 → 复核 → 指标分析）
 
 ```
 wechat.open_dashboard        进公众号首页（只导航）
@@ -133,6 +135,7 @@ wechat.publish_current_editor_to_qrcode  意图级：当前编辑页直接到二
 wechat.publish_existing_draft_to_qrcode  意图级：打开已有草稿再到二维码
 wechat.review_publish_history 只读：发表记录复核（可传标题）
 wechat.analyze_publish_metrics 只读：发表记录全维度指标分析
+wechat.review_content_performance 只读：发表记录+历史快照复盘（输出下一步运营判断）
 wechat.pin_publish_record / wechat.set_publish_record_private / wechat.close_publish_record_recommendation / wechat.copy_publish_record_link / wechat.change_publish_record_collection / wechat.change_publish_record_claim_source 发表记录更多菜单原子动作
 wechat.delete_publish_record 危险写：删除发表记录；同标题多篇时传 url 精确定位，confirmed=true 才确认删除
 ```
@@ -148,8 +151,9 @@ wechat.delete_publish_record 危险写：删除发表记录；同标题多篇时
 7. **写作是你（AI）的职责。** 深挖只给素材包 + 写作指南，不生成正文。你必须按 `article_writing_guide` 写成平台发布稿，再存成 article。
 8. **不要假设登录态。** `open_dashboard` 只负责打开首页；随后必须调用 `check_login` 校验登录态。
 9. **复核是只读动作。** 保存后用 `review_draft_box` 查草稿箱；人工扫码发布后用 `review_publish_history` 查发表记录。执行发表记录复核后，先问用户是否继续触发 `analyze_publish_metrics`，不要自动开始指标分析。
-10. **发表记录删除是危险动作。** `wechat.delete_publish_record(title=..., url=..., confirmed=false)` 默认只打开删除确认弹窗并停住；同标题多篇时必须传 `url` 精确定位。只有用户明确要求且传 `confirmed=true` 时才点击最终“确认”。确认后若进入管理员/运营者扫码验证，返回 `requires_human_scan=true`、`deleted=false`，二维码 URL 不得暴露。任何未知弹窗都必须失败停止，不许猜测点击。
-11. **发表弹窗必须状态驱动。** `publish_to_qrcode` 只会在 `publish_confirm` 时点“发表”，只会在 `publish_no_notify` / `continue_publish` 时点“继续发表”。`publish_no_notify` 表示当天免费群发通知已用完，内容会展示在公众号主页但不群发通知；这是正常确认页，不是异常。遇到 `account_auth_error`、`login_required`、`unknown_dialog` 会 failed 并停止，不允许猜测点击 footer 或切号按钮。
+10. **运营复盘要沉淀。** 每次 `wechat.analyze_publish_metrics` 或 `wechat.review_content_performance` 得到稳定结论后，把可复用规律更新到 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`，让后续 Agent 不必翻聊天记录。
+11. **发表记录删除是危险动作。** `wechat.delete_publish_record(title=..., url=..., confirmed=false)` 默认只打开删除确认弹窗并停住；同标题多篇时必须传 `url` 精确定位。只有用户明确要求且传 `confirmed=true` 时才点击最终“确认”。确认后若进入管理员/运营者扫码验证，返回 `requires_human_scan=true`、`deleted=false`，二维码 URL 不得暴露。任何未知弹窗都必须失败停止，不许猜测点击。
+12. **发表弹窗必须状态驱动。** `publish_to_qrcode` 只会在 `publish_confirm` 时点“发表”，只会在 `publish_no_notify` / `continue_publish` 时点“继续发表”。`publish_no_notify` 表示当天免费群发通知已用完，内容会展示在公众号主页但不群发通知；这是正常确认页，不是异常。遇到 `account_auth_error`、`login_required`、`unknown_dialog` 会 failed 并停止，不允许猜测点击 footer 或切号按钮。
 
 ## 典型完整工作流（一天的活）
 
@@ -186,13 +190,14 @@ wechat.delete_publish_record 危险写：删除发表记录；同标题多篇时
 18. wechat.review_publish_history title="..."                 人工扫码发布后复核发表记录
     → 返回 should_offer_metrics_analysis=true 时，先询问用户是否继续
 19. wechat.analyze_publish_metrics title="..."                用户确认后做指标分析
-20. wechat.pin_publish_record title="..." url="..."           发表记录更多菜单：置顶
-21. wechat.set_publish_record_private title="..." url="..."   发表记录更多菜单：仅自己可见
-22. wechat.close_publish_record_recommendation title="..." url="..."  发表记录更多菜单：关闭推荐
-23. wechat.copy_publish_record_link title="..." url="..."     发表记录更多菜单：复制链接
-24. wechat.change_publish_record_collection title="..." url="..."     发表记录更多菜单：修改合集
-25. wechat.change_publish_record_claim_source title="..." url="..."   发表记录更多菜单：声明创作来源
-26. wechat.delete_publish_record title="..." url="..." confirmed=false  只打开删除确认弹窗；确认删除需用户明确要求 confirmed=true
+20. wechat.review_content_performance title="..."             用历史快照做复盘判断与下一步建议
+21. wechat.pin_publish_record title="..." url="..."           发表记录更多菜单：置顶
+22. wechat.set_publish_record_private title="..." url="..."   发表记录更多菜单：仅自己可见
+23. wechat.close_publish_record_recommendation title="..." url="..."  发表记录更多菜单：关闭推荐
+24. wechat.copy_publish_record_link title="..." url="..."     发表记录更多菜单：复制链接
+25. wechat.change_publish_record_collection title="..." url="..."     发表记录更多菜单：修改合集
+26. wechat.change_publish_record_claim_source title="..." url="..."   发表记录更多菜单：声明创作来源
+27. wechat.delete_publish_record title="..." url="..." confirmed=false  只打开删除确认弹窗；确认删除需用户明确要求 confirmed=true
 ```
 
 ## 试生产前检查
@@ -207,7 +212,7 @@ wechat.delete_publish_record 危险写：删除发表记录；同标题多篇时
 期望：
 
 - 测试通过。
-- `list` 返回 78 个操作。
+- `list` 返回 80 个操作。
 - `status.server_running=true`。
 - `radar.status` 至少返回 `source_count=95`。
 - 新生产库首次运行时，`raw_item_count/event_count/alert_count/deep_dive_count` 可以为 0。
