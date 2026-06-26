@@ -252,8 +252,34 @@ def test_review_content_strategy_uses_latest_metrics_snapshot():
     assert item["ok"]
     profile = item["state"]["content_strategy_profile"]
     assert profile["available"] is True
+    assert profile["profile_version"] == 2
+    assert profile["evidence_level"] in ("weak", "medium", "strong")
+    assert profile["causal_claim_allowed"] is False
+    assert any("群发通知" in item for item in profile["confounders"])
+    assert any("观察性" in item for item in profile["interpretation_rules"])
     assert "涨价" in profile["impact_keywords"]
     assert profile["winning_titles"][0]["read_count"] == 134
+
+
+def test_content_strategy_profile_never_allows_causal_claim_without_experiment():
+    from agent_news.content.publish_performance import build_content_strategy_profile, build_publish_metrics_analysis
+
+    items = [
+        {
+            "title": f"OpenAI芯片成本砍半：第{index}篇让开发者账单重算",
+            "url": f"https://mp.weixin.qq.com/s/causal-{index}",
+            "published_at": "2026-06-26 20:00",
+            "read_count": 200 + index,
+            "share_count": 5,
+        }
+        for index in range(12)
+    ]
+    analysis = build_publish_metrics_analysis(items, snapshot_at="2026-06-26T12:00:00+00:00")
+    profile = build_content_strategy_profile(analysis)
+
+    assert profile["evidence_level"] == "strong"
+    assert profile["causal_claim_allowed"] is False
+    assert any("不得声称因果" in rule for rule in profile["interpretation_rules"])
 
 
 def test_prepare_wechat_payload_requires_author():

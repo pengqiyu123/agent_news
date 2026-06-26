@@ -259,5 +259,7 @@ def test_review_events_includes_history_hint_when_available(client):
     assert item["ok"]
     assert item["state"].get("historical_performance_hints")
     assert item["state"].get("content_strategy_profile")
+    assert item["state"]["content_strategy_profile"]["causal_claim_allowed"] is False
     event = next(e for e in item["state"]["events"] if e["id"] == "evt-history-match")
     assert "content_strategy_fit" in event
+    assert any("观察性参考" in reason for reason in event.get("why_recommended", []))

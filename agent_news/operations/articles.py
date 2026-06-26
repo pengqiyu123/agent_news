@@ -156,14 +156,14 @@ def review_quality(ctx, article_id: str) -> OperationResult:
         payload["quality_report"]["metrics"]["content_strategy_profile"] = content_strategy_profile
     if strategy_fit.get("label") == "weak":
         payload["quality_report"]["warnings"].append(
-            "运营策略弱匹配：" + "；".join(strategy_fit.get("warnings") or [])
+            "运营策略观察弱匹配（仅供参考）：" + "；".join(strategy_fit.get("warnings") or [])
         )
     if history_hint:
         payload["historical_performance_hint"] = history_hint
         payload["quality_report"]["metrics"]["historical_performance_hint"] = history_hint
         if history_hint.get("best_title"):
             payload["quality_report"]["warnings"].append(
-                f"历史相似标题表现参考：{history_hint.get('best_title')}（{history_hint.get('best_summary', {}).get('total_reads', 0)} 阅读）"
+                f"历史相似标题表现参考（观察性，不是因果）：{history_hint.get('best_title')}（{history_hint.get('best_summary', {}).get('total_reads', 0)} 阅读）"
             )
     if not report.passed:
         return OperationResult.failure(

@@ -324,10 +324,10 @@ def review_events(
         if content_strategy_profile.get("available"):
             event.setdefault("why_recommended", [])
             if strategy_fit.get("label") == "strong":
-                event["why_recommended"].append("命中当前公众号高表现内容策略")
+                event["why_recommended"].append("与当前公众号观察到的高表现结构较贴近")
             elif strategy_fit.get("label") == "weak":
                 event.setdefault("risks", [])
-                event["risks"].append("与当前公众号高表现内容策略弱匹配")
+                event["risks"].append("与当前公众号观察到的高表现结构弱匹配")
         similar = summarize_title_history(history_tasks, title=title, limit=3)
         if similar:
             history_hints[event.get("id")] = {
@@ -335,7 +335,7 @@ def review_events(
                 "top_titles": [item.get("title") for item in similar if item.get("title")][:3],
             }
             event.setdefault("why_recommended", [])
-            event["why_recommended"].append("历史相似标题在发表记录中出现过")
+            event["why_recommended"].append("历史相似标题在发表记录中出现过，仅作观察性参考")
             event["history_hint"] = history_hints[event.get("id")]
     if history_hints:
         state["historical_performance_hints"] = history_hints

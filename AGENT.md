@@ -96,7 +96,7 @@ radar.review_deep_dive       只读复核素材是否足够写文章，并返回
 文章桥接：
 - `article.create/get/list/update` 是 Agent 保存成稿的统一操作面。
 - 写文章前必须读取 `radar.review_deep_dive` 或 deep-dive 详情里的 `article_writing_guide`。这份规约已经内置在本项目，包含标题策略、短讯合集结构、禁用 AI 味词和事实纪律。
-- 写稿和选题前还要读取 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`。这是基于真实发表记录沉淀的运营复盘记忆，用于判断当前账号更适合的标题结构、选题方向和避坑点。
+- 写稿和选题前还要读取 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`。这是基于真实发表记录沉淀的观察性运营复盘记忆，用于判断当前账号更适合的标题结构、选题方向和避坑点；它不是标题因果实验，不能把相关性写成因果。
 - 标题可以在 Agent 内部推演 2-3 个候选，但最终只能保存 1 个定稿标题到 `article.title`；不要把标题选择题抛给用户，也不要把多个候选写进文章正文。
 - `article.review_quality` 是平台执行前的独立 Critique 原子；不通过时只允许修改文章或继续深挖，不能进入微信填写。
 - `article.prepare_wechat_payload` 把文章转成微信填写参数，不打开浏览器，不自动发布。
@@ -151,7 +151,7 @@ wechat.delete_publish_record 危险写：删除发表记录；同标题多篇时
 7. **写作是你（AI）的职责。** 深挖只给素材包 + 写作指南，不生成正文。你必须按 `article_writing_guide` 写成平台发布稿，再存成 article。
 8. **不要假设登录态。** `open_dashboard` 只负责打开首页；随后必须调用 `check_login` 校验登录态。
 9. **复核是只读动作。** 保存后用 `review_draft_box` 查草稿箱；人工扫码发布后用 `review_publish_history` 查发表记录。执行发表记录复核后，先问用户是否继续触发 `analyze_publish_metrics`，不要自动开始指标分析。
-10. **运营复盘要沉淀。** 每次 `wechat.analyze_publish_metrics` 或 `wechat.review_content_performance` 得到稳定结论后，把可复用规律更新到 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`，让后续 Agent 不必翻聊天记录。
+10. **运营复盘要沉淀，但不能夸大。** 每次 `wechat.analyze_publish_metrics` 或 `wechat.review_content_performance` 得到稳定结论后，把可复用规律更新到 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`，同时写明样本量、群发状态、发布时间/文章年龄等混杂因素。除非有真实随机实验，否则不得声称“标题导致阅读高”。
 11. **发表记录删除是危险动作。** `wechat.delete_publish_record(title=..., url=..., confirmed=false)` 默认只打开删除确认弹窗并停住；同标题多篇时必须传 `url` 精确定位。只有用户明确要求且传 `confirmed=true` 时才点击最终“确认”。确认后若进入管理员/运营者扫码验证，返回 `requires_human_scan=true`、`deleted=false`，二维码 URL 不得暴露。任何未知弹窗都必须失败停止，不许猜测点击。
 12. **发表弹窗必须状态驱动。** `publish_to_qrcode` 只会在 `publish_confirm` 时点“发表”，只会在 `publish_no_notify` / `continue_publish` 时点“继续发表”。`publish_no_notify` 表示当天免费群发通知已用完，内容会展示在公众号主页但不群发通知；这是正常确认页，不是异常。遇到 `account_auth_error`、`login_required`、`unknown_dialog` 会 failed 并停止，不允许猜测点击 footer 或切号按钮。
 

@@ -205,6 +205,10 @@ def test_article_review_quality_includes_content_strategy_fit():
     fit = item["state"]["content_strategy_fit"]
     assert fit["label"] in ("partial", "strong")
     assert "成本" in fit["matched_impact_keywords"]
+    profile = item["state"]["content_strategy_profile"]
+    assert profile["profile_version"] == 2
+    assert profile["causal_claim_allowed"] is False
+    assert profile["evidence_level"] in ("weak", "medium", "strong")
 
 
 def test_five_item_digest_accepts_five_ready_materials_without_override():

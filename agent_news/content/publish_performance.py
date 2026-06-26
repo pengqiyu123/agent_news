@@ -19,6 +19,8 @@ _READ_GROWTH_STRONG = 1.2
 _READ_GROWTH_WEAK = 0.8
 _RATE_GROWTH_STRONG = 1.15
 _RATE_GROWTH_WEAK = 0.85
+_EVIDENCE_SCORE_STRONG = 70
+_EVIDENCE_SCORE_MEDIUM = 40
 
 _IMPACT_TOKENS = (
     "涨价",
@@ -51,6 +53,12 @@ _TECH_TOKENS = (
     "数据中心",
 )
 _WEAK_FORMAT_TOKENS = ("速览", "今日科技", "科技速览", "发布新产品", "宣布合作")
+_BASE_CONFOUNDERS = (
+    "群发通知状态未显式分层",
+    "发布时间/时段未统一控制",
+    "封面、摘要、合集、创作来源可能同时变化",
+    "当前结果是观察性样本，不是随机实验",
+)
 
 
 def _utcnow() -> str:
@@ -87,6 +95,18 @@ def _to_float(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _metric_score(item: dict[str, Any]) -> float:
@@ -453,15 +473,53 @@ def build_content_strategy_profile(
     total_reads = _to_int(summary.get("total_reads"))
     total_shares = _to_int(summary.get("total_shares"))
     item_count = _to_int(summary.get("item_count"))
+    target_status = str(analysis.get("target_status") or "").strip()
+    target_found = analysis.get("target_found")
     winning_titles = patterns.get("winning_titles") or []
     top_reads = sum(_to_int(item.get("read_count")) for item in winning_titles[:4])
     top_read_share = round(top_reads / total_reads, 4) if total_reads else 0.0
+
+    evidence_score = 0
+    if item_count >= 10:
+        evidence_score += 30
+    elif item_count >= 5:
+        evidence_score += 20
+    elif item_count >= 1:
+        evidence_score += 10
+    if total_reads >= 100:
+        evidence_score += 20
+    elif total_reads >= 30:
+        evidence_score += 10
+    if total_shares >= 3:
+        evidence_score += 15
+    if len(winning_titles) >= 3:
+        evidence_score += 15
+    if target_status == "matched_title" or target_found is True:
+        evidence_score += 10
+    evidence_score = min(100, evidence_score)
+    if evidence_score >= _EVIDENCE_SCORE_STRONG:
+        evidence_level = "strong"
+    elif evidence_score >= _EVIDENCE_SCORE_MEDIUM:
+        evidence_level = "medium"
+    else:
+        evidence_level = "weak"
+
+    confounders = _dedupe_strings(
+        [
+            *_BASE_CONFOUNDERS,
+            "标题表现与子赛道混合，科技账号内仍存在 AI/芯片/政策/消费电子等差异",
+            "样本中存在刚发布文章时的冷启动波动",
+            "若后续出现未群发发表记录，不能与群发文章直接横比阅读量",
+        ]
+    )
+    causal_claim_allowed = False
 
     guidance = [
         "优先选择 AI、芯片、硬件、手机、电脑、电力、供应链等技术事件，但必须落到成本、价格、账单、裁员、监管或普通用户影响。",
         "标题前半句给具体公司/产品/事件，后半句给现实后果；不要只写发布、合作、升级。",
         "5 条短讯合集必须先提炼共同主线，例如涨价、缺电、成本外溢、监管或供应链变化。",
         "当前点赞、留言、推荐、划线、赞赏样本不足，先以阅读和分享判断选题吸引力。",
+        "只把这里当作账号内观察性画像，不要把它当成标题因果实验。",
     ]
     avoid = [
         "泛科技速览",
@@ -470,11 +528,21 @@ def build_content_strategy_profile(
         "发布后 24 小时内过早判定失败",
     ]
     return {
-        "profile_version": 1,
+        "profile_version": 2,
         "generated_at": generated_at or _utcnow(),
         "source_operation": "wechat.analyze_publish_metrics",
         "source_scope": analysis.get("scope") or "all_items",
         "sample_size": item_count,
+        "evidence_score": evidence_score,
+        "evidence_level": evidence_level,
+        "causal_claim_allowed": causal_claim_allowed,
+        "confounders": confounders,
+        "sample_notes": {
+            "target_status": target_status,
+            "target_found": target_found,
+            "article_age_note": "当前样本未统一按发布后时长分层，成熟度可能不同",
+            "notification_note": "群发通知状态未自动分层，阅读量不可直接横比。",
+        },
         "summary": {
             "total_reads": total_reads,
             "total_shares": total_shares,
@@ -495,6 +563,12 @@ def build_content_strategy_profile(
         "weak_titles": patterns.get("weak_titles") or [],
         "top_tokens": patterns.get("top_tokens") or [],
         "next_content_guidance": guidance,
+        "interpretation_rules": [
+            "只能把画像当成观察性偏好，不得当成因果结论。",
+            "样本量小、刚发布、未分层群发状态时，结论只作方向参考。",
+            "即使 evidence_level 为 strong，也只代表观察证据更充分；没有随机实验时仍不得声称因果。",
+            "当 evidence_level 为 weak/medium 时，不应触发硬规则或自动加权。",
+        ],
         "suggested_next_operation": "radar.review_events",
     }
 
@@ -779,9 +853,19 @@ def build_content_performance_review(
         weakness_tags,
         current_analysis,
     )
+    profile = build_content_strategy_profile(current_analysis)
     return {
         "performance_label": performance_label,
         "trend": trend,
+        "evidence_level": profile.get("evidence_level"),
+        "evidence_score": profile.get("evidence_score"),
+        "causal_claim_allowed": False,
+        "confounders": profile.get("confounders") or [],
+        "interpretation_rules": [
+            "performance_label 是观察性标签，不代表标题或选题的因果结论。",
+            "单篇复盘必须结合群发状态、发布时间、文章年龄和历史快照数量。",
+            "小于 24 小时的新文章只看趋势，不做最终质量结论。",
+        ],
         "baseline": baseline,
         "delta": delta,
         "history_count": len(history_snapshots),

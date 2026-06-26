@@ -204,8 +204,8 @@ CLI 推荐使用项目虚拟环境：
 | `wechat.review_draft_box` | `title?`, `limit?` | 草稿箱复核。保存草稿后可传标题确认目标草稿存在 |
 | `wechat.review_publish_history` | `title?`, `limit?`, `max_pages?` | 发表记录复核。传标题时校验目标文章是否出现在远端发表记录 |
 | `wechat.analyze_publish_metrics` | `title?`, `url?`, `limit?`, `max_pages?` | 基于发表记录提取全维度数据指标：阅读、点赞、分享、推荐、留言、划线、赞赏、转载 |
-| `wechat.review_content_performance` | `title?`, `url?`, `max_pages?`, `lookback_runs?` | 只读：基于发表记录+历史快照做复盘判断，输出强弱标签、趋势、下一步建议 |
-| `wechat.review_content_strategy` | `lookback_runs?` | 只读：从最近指标快照生成运营策略画像，供雷达选题和文章质量门禁复用 |
+| `wechat.review_content_performance` | `title?`, `url?`, `max_pages?`, `lookback_runs?` | 只读：基于发表记录+历史快照做观察性复盘，输出强弱标签、趋势、证据等级、混杂因素和下一步建议 |
+| `wechat.review_content_strategy` | `lookback_runs?` | 只读：从最近指标快照生成观察性运营策略画像，供雷达选题和文章质量门禁提示复用 |
 | `wechat.pin_publish_record` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：置顶 |
 | `wechat.set_publish_record_private` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 发表记录更多菜单：仅自己可见 |
 | `wechat.delete_publish_record` | `title`, `confirmed?`, `max_pages?`, `url?/target_url?` | 危险写操作：按标题定位发表记录，同标题多篇时可传 URL 精确定位；默认只打开删除确认弹窗，只有 `confirmed=true` 才点击最终“确认” |
@@ -218,10 +218,10 @@ CLI 推荐使用项目虚拟环境：
 
 - `review_draft_box` 只确认草稿箱远端状态，不打开编辑器、不修改内容。
 - `review_publish_history` 只确认发表记录远端状态；返回 `should_offer_metrics_analysis=true` 时，Agent 应主动询问用户是否继续触发 `wechat.analyze_publish_metrics`。
-- `review_content_performance` 用于复盘判断，不是新的一次抓取；它要求 `title` 或 `url` 至少一个用于定位单篇文章，并基于历史快照给出下一步建议。
-- `review_content_strategy` 是闭环记忆入口；它把最近 `analyze_publish_metrics` 快照转成结构化 `content_strategy_profile`，后续 `radar.review_events` 和 `article.review_quality` 会自动带上这份画像。
+- `review_content_performance` 用于复盘判断，不是新的一次抓取；它要求 `title` 或 `url` 至少一个用于定位单篇文章，并基于历史快照给出下一步建议。返回的 `performance_label` 是观察性标签，不是标题或选题的因果结论。
+- `review_content_strategy` 是闭环记忆入口；它把最近 `analyze_publish_metrics` 快照转成结构化 `content_strategy_profile`，后续 `radar.review_events` 和 `article.review_quality` 会自动带上这份画像。画像包含 `evidence_level`、`causal_claim_allowed=false`、`confounders` 和 `interpretation_rules`，弱/中证据只能提示，不能触发硬规则。
 - `analyze_publish_metrics` 是数据闭环动作，用于量化稿件质量、受众喜爱程度和传播性。它不等于发布确认，也不会修改文章。
-- 稳定复盘结论应同步沉淀到 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`，供后续 Agent 选题、写标题和写正文时读取。
+- 稳定复盘结论应同步沉淀到 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`，供后续 Agent 选题、写标题和写正文时读取；沉淀时必须写明样本范围和混杂因素，禁止写成“标题导致阅读高”。
 - 发表记录更多菜单 7 个动作已拆成独立原子操作：置顶、仅自己可见、删除、关闭推荐、复制链接、修改合集、声明创作来源。它们都通过标题定位目标记录；同标题多篇时必须补 `url`/`target_url` 精确定位。
 - `delete_publish_record` 是危险写动作：默认只打开删除确认弹窗，不会自动点最终“确认”。只有用户明确要求并传 `confirmed=true` 才执行真实删除；未知弹窗、目标不唯一、按钮不精确都必须失败停止。
 - `delete_publish_record` 点击“确定”后可能进入管理员/运营者扫码验证；此时返回 `status=skipped`、`requires_human_scan=true`、`deleted=false`。二维码 URL 含安全票据，返回值只暴露 `has_qrcode=true`，不暴露二维码 `src`。
