@@ -44,6 +44,10 @@ _PUBLISH_RECORD_MENU_OPTIONS = (
 )
 
 
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _selectors(key: str) -> list[str]:
     return get_selectors(key)
 

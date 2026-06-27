@@ -746,6 +746,43 @@ def test_review_content_performance_requires_locator(client):
     assert "title 或 url" in item["message"]
 
 
+def test_analyze_publish_metrics_operation_uses_snapshot_time(monkeypatch):
+    from agent_news.operations.wechat import history
+
+    class _PublishHistoryPage:
+        url = "https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list"
+
+    monkeypatch.setattr(history, "_open_publish_history_on_page", lambda page, logs: logs.append("nav ok") or True)
+    monkeypatch.setattr(
+        history,
+        "_scrape_publish_history_pages",
+        lambda page, max_pages, limit: (
+            [
+                {
+                    "title": "OpenAI芯片成本砍半：开发者账单重算",
+                    "url": "https://mp.weixin.qq.com/s/metric-op",
+                    "published_at": "2026-06-27 10:00",
+                    "read_count": 88,
+                    "share_count": 3,
+                }
+            ],
+            ["scrape ok"],
+        ),
+    )
+    monkeypatch.setattr(
+        history.BROWSER_MANAGER,
+        "with_session",
+        lambda channel=None, *, action_fn, **kwargs: action_fn(None, _PublishHistoryPage()),  # noqa: ARG005
+    )
+
+    result = history.analyze_publish_metrics(None, limit=1, max_pages=1)
+
+    assert result.status == "ok"
+    assert result.state["analysis_snapshot_at"]
+    assert result.state["analysis"]["analysis_snapshot_at"] == result.state["analysis_snapshot_at"]
+    assert result.state["content_strategy_profile"]["causal_claim_allowed"] is False
+
+
 def _patch_delete_publish_record_nav(monkeypatch):
     from agent_news.operations.wechat import history
 
