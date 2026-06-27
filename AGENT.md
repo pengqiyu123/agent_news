@@ -96,7 +96,7 @@ radar.review_deep_dive       只读复核素材是否足够写文章，并返回
 文章桥接：
 - `article.create/get/list/update` 是 Agent 保存成稿的统一操作面。
 - 写文章前必须读取 `radar.review_deep_dive` 或 deep-dive 详情里的 `article_writing_guide`。这份规约已经内置在本项目，包含标题策略、短讯合集结构、禁用 AI 味词和事实纪律。
-- 写稿和选题前还要读取 `docs/CONTENT_PERFORMANCE_INSIGHTS.md`。这是基于真实发表记录沉淀的观察性运营复盘记忆，用于判断当前账号更适合的标题结构、选题方向和避坑点；它不是标题因果实验，不能把相关性写成因果。
+- 写稿和选题前还要读取 `docs/CONTENT_PERFORMANCE_INSIGHTS.md` 的“当前核心画像”和“解释边界”。这是基于真实发表记录沉淀的观察性运营复盘记忆，用于判断当前账号更适合的标题结构、选题方向和避坑点；它不是标题因果实验，不能把相关性写成因果。
 - 标题可以在 Agent 内部推演 2-3 个候选，但最终只能保存 1 个定稿标题到 `article.title`；不要把标题选择题抛给用户，也不要把多个候选写进文章正文。
 - `article.review_quality` 是平台执行前的独立 Critique 原子；不通过时只允许修改文章或继续深挖，不能进入微信填写。
 - `article.prepare_wechat_payload` 把文章转成微信填写参数，不打开浏览器，不自动发布。
