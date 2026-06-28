@@ -7,11 +7,15 @@ deciding the next atom to run.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from ..models.intel import EventDeepDive, IntelAlert, IntelEvent, RawItem, Source
 from .writing_guide import build_article_writing_guide
+
+
+DEFAULT_EVENT_REVIEW_TIMEZONE = "Asia/Shanghai"
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -21,6 +25,51 @@ def _parse_dt(value: str | None) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _coerce_date(value: str | date | None, tz: ZoneInfo) -> date:
+    if value is None or str(value).strip() == "":
+        return datetime.now(tz).date()
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    raw = str(value).strip()
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(tz).date()
+    except ValueError:
+        return date.fromisoformat(raw[:10])
+
+
+def _event_time_for_daily_scope(event: IntelEvent) -> datetime | None:
+    """Pick the most meaningful event timestamp for daily editorial selection."""
+    for value in (
+        event.published_at,
+        event.first_seen_at,
+        event.last_seen_at,
+        event.updated_at,
+        event.created_at,
+    ):
+        parsed = _parse_dt(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def event_matches_day(event: IntelEvent, target_date: str | date | None = None, timezone_name: str = DEFAULT_EVENT_REVIEW_TIMEZONE) -> bool:
+    tz = ZoneInfo(timezone_name or DEFAULT_EVENT_REVIEW_TIMEZONE)
+    event_time = _event_time_for_daily_scope(event)
+    if event_time is None:
+        return False
+    if event_time.tzinfo is None:
+        event_time = event_time.replace(tzinfo=timezone.utc)
+    return event_time.astimezone(tz).date() == _coerce_date(target_date, tz)
+
+
+def event_day_window(target_date: str | date | None = None, timezone_name: str = DEFAULT_EVENT_REVIEW_TIMEZONE) -> tuple[datetime, datetime, str]:
+    tz = ZoneInfo(timezone_name or DEFAULT_EVENT_REVIEW_TIMEZONE)
+    day = _coerce_date(target_date, tz)
+    start_local = datetime.combine(day, time.min, tzinfo=tz)
+    end_local = datetime.combine(day, time.max, tzinfo=tz)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), day.isoformat()
 
 
 def _latest_iso(values: list[str | None]) -> str | None:

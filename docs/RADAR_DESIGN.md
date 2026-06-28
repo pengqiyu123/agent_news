@@ -274,6 +274,7 @@ radar.review_deep_dive event_id=...
 - 替代 Agent 裸读 `/api/intel/events` 后自行猜测。
 - 给出 Top N 事件、推荐理由、风险提示、下一步建议。
 - 支持“今天有什么值得写”的核心入口。
+- 默认只看北京时间当天素材；历史复盘、补旧稿或追踪旧事件时必须显式传 `date_scope=all`。
 
 参数：
 
@@ -283,6 +284,9 @@ radar.review_deep_dive event_id=...
 | `min_score` | `0` | 最低综合分 |
 | `include_ignored` | `false` | 是否包含 ignored 事件 |
 | `watchlist` | `""` | 临时关注词，逗号分隔 |
+| `date_scope` | `today` | `today` 只看当天素材；`all` 才看历史事件 |
+| `target_date` | 北京时间今天 | 指定 `YYYY-MM-DD` 复核某一天 |
+| `timezone` | `Asia/Shanghai` | 日期过滤时区 |
 
 返回字段建议：
 

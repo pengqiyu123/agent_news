@@ -243,6 +243,8 @@ class IntelRepository(Repository):
         offset: int = 0,
         ignored: bool | None = False,
         min_score: float | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
     ) -> tuple[list[IntelEvent], int]:
         with self.transaction() as session:
             stmt = select(IntelEventRow)
@@ -251,6 +253,18 @@ class IntelRepository(Repository):
                 stmt = stmt.where(IntelEventRow.ignored == "false")
             elif ignored is True:
                 stmt = stmt.where(IntelEventRow.ignored == "true")
+            if start_at is not None and end_at is not None:
+                # Editorial freshness should prefer the source publish time, but
+                # some sources miss it; first/last seen and row timestamps keep
+                # same-day collected items usable without surfacing old history.
+                event_time = func.coalesce(
+                    IntelEventRow.published_at,
+                    IntelEventRow.first_seen_at,
+                    IntelEventRow.last_seen_at,
+                    IntelEventRow.updated_at,
+                    IntelEventRow.created_at,
+                )
+                stmt = stmt.where(event_time >= start_at, event_time <= end_at)
             count_stmt = select(func.count()).select_from(stmt.subquery())
             total = session.scalar(count_stmt) or 0
             rows = session.scalars(

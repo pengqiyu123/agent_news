@@ -61,7 +61,7 @@ CLI 推荐使用项目虚拟环境：
 | `radar.sync_sources` | `source_key?` | 逐源采集所有/单个源 → raw_items，返回 `source_results` 和 partial 信息 |
 | `radar.sync_one_source` | `source_key` | 采集单个源 |
 | `radar.build_events` | `merge_threshold?`, `alert_threshold?`, `watchlist?`, `clear_raw?` | 聚类+打分+物化 alerts，返回 `top_events` 和下一步建议 |
-| `radar.review_events` | `limit?`, `min_score?`, `include_ignored?`, `watchlist?` | 只读：返回 Top events、推荐理由、风险和下一步建议 |
+| `radar.review_events` | `limit?`, `min_score?`, `include_ignored?`, `watchlist?`, `date_scope?`, `target_date?`, `timezone?` | 只读：默认只返回北京时间当天 Top events、推荐理由、风险和下一步建议；复盘历史需显式 `date_scope=all` |
 | `radar.deep_dive_event` | `event_id`, `max_sources?`, `force?` | 抓全文、提取素材、附写作指南；返回 `source_results` 和 `writing_readiness` |
 | `radar.review_deep_dive` | `event_id?`, `deep_dive_id?` | 只读：复核深挖素材、来源成功/失败和写作准备度，并返回 `article_writing_guide` |
 | `radar.source_health_report` | — | 只读：汇总源池健康度、低贡献源、疑似重复源 |
@@ -82,7 +82,7 @@ CLI 推荐使用项目虚拟环境：
 读取端点（非操作）：
 - `GET /api/intel/sources` / `GET /api/intel/sources/{key}`
 - `GET /api/intel/raw-items`
-- `GET /api/intel/events` （支持 `ignored`, `min_score` 过滤）
+- `GET /api/intel/events` （默认只看北京时间当天；支持 `ignored`, `min_score`, `date_scope`, `target_date`, `timezone` 过滤；看历史需 `date_scope=all`）
 - `GET /api/intel/events/{id}`
 - `GET /api/intel/alerts`
 - `GET /api/intel/deep-dives` / `GET /api/intel/deep-dives/{id}`

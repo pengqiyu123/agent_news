@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from ..db.intel_repository import get_intel_repository
+from ..intel.review import DEFAULT_EVENT_REVIEW_TIMEZONE, event_day_window
 from ..models.intel import (
     DeepDiveListResponse,
     DeepDiveResponse,
@@ -61,11 +62,28 @@ def list_events(
     page_size: int = Query(50, ge=1, le=200),
     ignored: bool | None = False,
     min_score: float | None = None,
+    date_scope: str = Query("today", pattern="^(today|all)$"),
+    target_date: str = "",
+    timezone: str = DEFAULT_EVENT_REVIEW_TIMEZONE,
 ) -> IntelEventListResponse:
-    """List events, by default excluding ignored ones, ordered by composite score."""
+    """List events, defaulting to same-day material ordered by composite score."""
     repo = get_intel_repository()
     offset = (page - 1) * page_size
-    items, total = repo.list_events(limit=page_size, offset=offset, ignored=ignored, min_score=min_score)
+    if date_scope == "today":
+        try:
+            start_at, end_at, _ = event_day_window(target_date or None, timezone)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"invalid target_date/timezone: {type(exc).__name__}: {exc}") from exc
+        items, total = repo.list_events(
+            limit=page_size,
+            offset=offset,
+            ignored=ignored,
+            min_score=min_score,
+            start_at=start_at,
+            end_at=end_at,
+        )
+    else:
+        items, total = repo.list_events(limit=page_size, offset=offset, ignored=ignored, min_score=min_score)
     return IntelEventListResponse(items=items, total=total)
 
 

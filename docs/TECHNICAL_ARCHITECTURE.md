@@ -248,6 +248,12 @@ IntelRepository.count_deep_dives()
 - `worth_to_brief`
 - 临时 `watchlist` 与 `title/tags/entity_names/anchor_tokens` 的命中
 
+日常选题必须先过日期窗口：
+
+- `radar.review_events` 和 `/api/intel/events` 默认 `date_scope=today`，按 `Asia/Shanghai` 当天筛选。
+- 日期判断优先使用 `published_at`，缺失时退到 `first_seen_at/last_seen_at/updated_at/created_at`。
+- 历史复盘、补旧稿或调试才允许显式传 `date_scope=all`；不能让历史高分事件自动进入当天写作池。
+
 风险提示只允许来自真实状态：
 
 - `deep_dive_status` 为空：尚未深挖

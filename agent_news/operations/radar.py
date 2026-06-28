@@ -24,8 +24,10 @@ from ..intel.score import build_events_from_clusters, materialize_alerts
 from ..intel.deep_dive import build_deep_dive
 from ..intel.writing_guide import build_article_writing_guide
 from ..intel.review import (
+    DEFAULT_EVENT_REVIEW_TIMEZONE,
     build_event_review,
     build_radar_status,
+    event_day_window,
     review_deep_dive_state,
     summarize_event,
 )
@@ -298,6 +300,9 @@ def build_events(
         "min_score": "最低综合分，默认 0",
         "include_ignored": "是否包含 ignored 事件，默认 False",
         "watchlist": "临时关注词，逗号分隔",
+        "date_scope": "today|all，默认 today；日常选题只看当天素材",
+        "target_date": "可选 YYYY-MM-DD；date_scope=today 时按该日期过滤，默认北京时间今天",
+        "timezone": "日期过滤时区，默认 Asia/Shanghai",
     },
 )
 def review_events(
@@ -306,11 +311,40 @@ def review_events(
     min_score: float = 0,
     include_ignored: bool = False,
     watchlist: str = "",
+    date_scope: str = "today",
+    target_date: str = "",
+    timezone: str = DEFAULT_EVENT_REVIEW_TIMEZONE,
 ) -> OperationResult:
     repo = get_intel_repository()
     ignored = None if include_ignored else False
-    events, total = repo.list_events(limit=max(1, int(limit)), ignored=ignored, min_score=min_score)
+    normalized_scope = str(date_scope or "today").strip().lower()
+    if normalized_scope not in {"today", "all"}:
+        return OperationResult.failure(message="date_scope must be 'today' or 'all'")
+    day_window = {}
+    if normalized_scope == "today":
+        try:
+            start_at, end_at, target_day = event_day_window(target_date or None, timezone)
+        except Exception as exc:
+            return OperationResult.failure(message=f"invalid target_date/timezone: {type(exc).__name__}: {exc}")
+        day_window = {
+            "date_scope": "today",
+            "target_date": target_day,
+            "timezone": timezone or DEFAULT_EVENT_REVIEW_TIMEZONE,
+            "start_at": start_at.isoformat(),
+            "end_at": end_at.isoformat(),
+        }
+        events, total = repo.list_events(
+            limit=max(1, int(limit)),
+            ignored=ignored,
+            min_score=min_score,
+            start_at=start_at,
+            end_at=end_at,
+        )
+    else:
+        day_window = {"date_scope": "all"}
+        events, total = repo.list_events(limit=max(1, int(limit)), ignored=ignored, min_score=min_score)
     state = build_event_review(events, total=total, watchlist=watchlist)
+    state["date_filter"] = day_window
     try:
         history_tasks, _ = get_repository().list_publish_tasks(limit=100)
     except Exception:
@@ -342,8 +376,14 @@ def review_events(
     state["content_strategy_profile"] = content_strategy_profile
     if not events:
         state["suggested_next_operation"] = "radar.sync_sources"
+        if normalized_scope == "today":
+            return OperationResult.success(
+                message="no same-day events available; run radar.sync_sources then radar.build_events",
+                **state,
+            )
         return OperationResult.success(message="no events available; run radar.sync_sources then radar.build_events", **state)
-    return OperationResult.success(message=f"reviewed {len(events)} events", **state)
+    suffix = f" for {day_window.get('target_date')}" if normalized_scope == "today" else ""
+    return OperationResult.success(message=f"reviewed {len(events)} events{suffix}", **state)
 
 
 # ── Stage 4: deep dive ──────────────────────────────────────────────────────

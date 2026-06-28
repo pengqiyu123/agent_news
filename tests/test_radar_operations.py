@@ -135,7 +135,7 @@ def test_full_radar_chain_end_to_end(client):
     assert result["state"]["event_count"] >= 2  # at least GPT-5 + weather
 
     # find the GPT-5 event (highest score, watchlist hit)
-    resp = client.get("/api/intel/events")
+    resp = client.get("/api/intel/events?date_scope=all")
     events = resp.json()["items"]
     assert len(events) >= 2
     gpt_candidates = [event for event in events if "gpt" in event["title"].lower()]
@@ -253,7 +253,9 @@ def test_review_events_includes_history_hint_when_available(client):
         alert_state="hot",
     ))
 
-    resp = client.post("/api/operations/radar.review_events/execute", json={"params": {"limit": 50, "min_score": 60}})
+    resp = client.post("/api/operations/radar.review_events/execute", json={
+        "params": {"limit": 50, "min_score": 60, "date_scope": "all"}
+    })
     assert resp.status_code == 200
     item = resp.json()["item"]
     assert item["ok"]
@@ -263,3 +265,54 @@ def test_review_events_includes_history_hint_when_available(client):
     event = next(e for e in item["state"]["events"] if e["id"] == "evt-history-match")
     assert "content_strategy_fit" in event
     assert any("观察性参考" in reason for reason in event.get("why_recommended", []))
+
+
+def test_review_events_defaults_to_same_day_material(client):
+    from agent_news.db.intel_repository import get_intel_repository
+    from agent_news.models.intel import IntelEvent
+
+    intel_repo = get_intel_repository()
+    intel_repo.upsert_event(IntelEvent(
+        id="evt-date-filter-old",
+        title="旧素材高分事件不应进入当天选题",
+        representative_link="https://example.com/old",
+        source_count=3,
+        platform_count=1,
+        composite_score=999,
+        alert_state="hot",
+        published_at="2026-06-27T10:00:00+08:00",
+    ))
+    intel_repo.upsert_event(IntelEvent(
+        id="evt-date-filter-today",
+        title="当天素材应该进入选题",
+        representative_link="https://example.com/today",
+        source_count=2,
+        platform_count=1,
+        composite_score=10,
+        alert_state="rising",
+        published_at="2026-06-28T10:00:00+08:00",
+    ))
+
+    resp = client.post("/api/operations/radar.review_events/execute", json={
+        "params": {"limit": 50, "target_date": "2026-06-28", "timezone": "Asia/Shanghai"}
+    })
+    assert resp.status_code == 200
+    item = resp.json()["item"]
+    assert item["ok"]
+    event_ids = {event["id"] for event in item["state"]["events"]}
+    assert "evt-date-filter-today" in event_ids
+    assert "evt-date-filter-old" not in event_ids
+    assert item["state"]["date_filter"]["date_scope"] == "today"
+    assert item["state"]["date_filter"]["target_date"] == "2026-06-28"
+
+
+def test_review_events_allows_explicit_history_scope(client):
+    resp = client.post("/api/operations/radar.review_events/execute", json={
+        "params": {"limit": 200, "date_scope": "all", "min_score": 900}
+    })
+    assert resp.status_code == 200
+    item = resp.json()["item"]
+    assert item["ok"]
+    event_ids = {event["id"] for event in item["state"]["events"]}
+    assert "evt-date-filter-old" in event_ids
+    assert item["state"]["date_filter"]["date_scope"] == "all"

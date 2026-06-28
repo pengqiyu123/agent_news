@@ -75,14 +75,14 @@ radar.propose_source          生成添加建议，不写库
 radar.add_validated_source    通过门禁后写入正式源
 radar.sync_sources            采集所有/单个源 → raw_items，返回 source_results
 radar.build_events            聚类 + 打分 + 物化 alerts → intel_events
-radar.review_events           只读复核 Top events、推荐理由、风险、deep dive 参数
+radar.review_events           只读复核当天 Top events、推荐理由、风险、deep dive 参数（默认只看北京时间当天）
 radar.deep_dive_event        抓全文、提取事实/引文/时间线 + 写作指南
 radar.review_deep_dive       只读复核素材是否足够写文章，并返回 article_writing_guide
 （你根据深挖结果自己写文章，存成 article）
 ```
 
 读取入口：
-- `GET /api/intel/events` — 事件列表（按 composite_score 排序，默认排除 ignored）
+- `GET /api/intel/events` — 事件列表（默认只看北京时间当天，按 composite_score 排序，默认排除 ignored；看历史必须显式 `date_scope=all`）
 - `GET /api/intel/events/{id}` — 单事件详情
 - `GET /api/intel/alerts` — 高分预警
 - `GET /api/intel/events/{id}/deep-dive` — 深挖结果（含 article_writing_guide）
@@ -94,6 +94,7 @@ radar.review_deep_dive       只读复核素材是否足够写文章，并返回
 - 当前生产源池为 95 个内置默认源，已经随本项目分发，不需要外部项目参与。
 
 文章桥接：
+- 日常写稿只能从当天素材池选题：`radar.review_events` 和 `/api/intel/events` 默认按北京时间当天过滤。除非用户明确要求复盘、补旧稿、追踪旧事件，否则不要传 `date_scope=all`。
 - `article.create/get/list/update` 是 Agent 保存成稿的统一操作面。
 - 写文章前必须读取 `radar.review_deep_dive` 或 deep-dive 详情里的 `article_writing_guide`。这份规约已经内置在本项目，包含标题策略、短讯合集结构、禁用 AI 味词和事实纪律。
 - 写稿和选题前还要读取 `docs/CONTENT_PERFORMANCE_INSIGHTS.md` 的“当前核心画像”和“解释边界”。这是基于真实发表记录沉淀的观察性运营复盘记忆，用于判断当前账号更适合的标题结构、选题方向和避坑点；它不是标题因果实验，不能把相关性写成因果。
@@ -161,7 +162,7 @@ wechat.delete_publish_record 危险写：删除发表记录；同标题多篇时
 1. radar.status                                               看源池与运行数据
 2. radar.sync_sources 或 radar.sync_one_source                  采集
 3. radar.build_events clear_raw=false watchlist="ai,openai"    聚类
-4. radar.review_events limit=10                                选热点
+4. radar.review_events limit=10                                选当天热点（默认只看北京时间当天素材）
 5. radar.deep_dive_event event_id=evt-xxx                      深挖
 6. radar.review_deep_dive event_id=evt-xxx                     复核素材；读取 article_writing_guide；ready 才继续写
 7. article.create                                               按写作指南写成 1 个标题 + 平台发布稿后保存

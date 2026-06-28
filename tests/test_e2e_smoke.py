@@ -62,7 +62,7 @@ def test_full_agent_workflow_e2e(client):
     assert event_count >= 2  # GPT-6 cluster + farmers market
 
     # ── 4. Pick the hottest event ───────────────────────────────────────────
-    events = client.get("/api/intel/events").json()["items"]
+    events = client.get("/api/intel/events?date_scope=all").json()["items"]
     gpt_events = [event for event in events if "GPT" in event["title"]]
     top_event = max(gpt_events, key=lambda e: e["composite_score"])
     assert "GPT" in top_event["title"]
